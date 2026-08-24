@@ -143,12 +143,17 @@ def process_reconciliation_batch(db: Session, batch_id: str) -> MetricsSnapshot:
             processed_inv_ids.add(inv.transaction_id)
 
         # Step 1: Run Deterministic Rules
-        rule_res: RuleMatchResult = apply_rules_in_order(
-            invoice=inv,
-            settlement=settle,
-            bank=bank,
-            duplicate_order_ids=duplicates,
-        )
+        # If 3-way batch has bank records, but this settlement's UTR is not credited in bank statements,
+        # it is a missing bank credit exception (cannot match rules)
+        if len(norm_banks) > 0 and bank is None:
+            rule_res = RuleMatchResult(is_matched=False, notes="Bank credit missing in bank statement.")
+        else:
+            rule_res: RuleMatchResult = apply_rules_in_order(
+                invoice=inv,
+                settlement=settle,
+                bank=bank,
+                duplicate_order_ids=duplicates,
+            )
 
         match_id = str(uuid.uuid4())
 
@@ -218,7 +223,7 @@ def process_reconciliation_batch(db: Session, batch_id: str) -> MetricsSnapshot:
                 elif inv and inv.order_id in duplicates:
                     cat = "duplicate_invoice"
                     notes = f"Duplicate invoice detected with shared order ID '{inv.order_id}'."
-                elif bank and bank.amount != settle.amount:
+                elif (len(norm_banks) > 0 and bank is None) or (inv and inv.amount == settle.amount and bank and bank.amount != settle.amount):
                     cat = "missing_credit"
                     notes = "Settlement payout not credited in bank statement."
                 else:
@@ -335,6 +340,49 @@ async def upload_batch(
     persist_normalized_records(db, bnk_records, batch_id=batch.id)
 
     # Trigger pipeline
+    process_reconciliation_batch(db, batch.id)
+    db.refresh(batch)
+
+    return {
+        "batch_id": batch.id,
+        "status": batch.status,
+        "uploaded_at": batch.uploaded_at.isoformat(),
+    }
+
+
+@router.post("/batches/demo", status_code=status.HTTP_201_CREATED)
+@router.post("/api/v1/batches/demo", status_code=status.HTTP_201_CREATED)
+def trigger_demo_batch(db: Session = Depends(get_db)):
+    """
+    Triggers automated reconciliation against the full 100-row synthetic dataset.
+    """
+    data_dir = "backend/synthetic-data"
+    settle_path = os.path.join(data_dir, "settlements.csv")
+    bank_path = os.path.join(data_dir, "bank_statements.csv")
+    inv_path = os.path.join(data_dir, "invoices.csv")
+
+    settle_df = SettlementParser().parse(settle_path)
+    bank_df = BankStatementParser().parse(bank_path)
+    inv_df = InvoiceParser().parse(inv_path)
+
+    batch = Batch(
+        id=str(uuid.uuid4()),
+        settlement_filename="settlements.csv",
+        bank_filename="bank_statements.csv",
+        invoice_filename="invoices.csv",
+        status="processing",
+    )
+    db.add(batch)
+    db.commit()
+
+    inv_records = normalize_dataframe(inv_df, "invoice", batch_id=batch.id)
+    set_records = normalize_dataframe(settle_df, "settlement", batch_id=batch.id)
+    bnk_records = normalize_dataframe(bank_df, "bank", batch_id=batch.id)
+
+    persist_normalized_records(db, inv_records, batch_id=batch.id)
+    persist_normalized_records(db, set_records, batch_id=batch.id)
+    persist_normalized_records(db, bnk_records, batch_id=batch.id)
+
     process_reconciliation_batch(db, batch.id)
     db.refresh(batch)
 
