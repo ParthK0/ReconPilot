@@ -265,57 +265,16 @@ export default function Dashboard() {
     setProcessingState("reading");
 
     try {
-      // Create synthetic sample CSV files directly from mock endpoint or inline blobs
-      const invoiceData = `invoice_id,order_id,amount,customer_id,currency,created_at,status
-INV-0001,ORD-2026-0001,15000.00,CUST-001,INR,2026-08-01,paid
-INV-0087,ORD-2026-0087,12000.00,CUST-087,INR,2026-08-01,paid
-INV-0088,ORD-2026-0088,25000.00,CUST-088,INR,2026-08-01,paid
-INV-0093,ORD-2026-0093,9500.00,CUST-093,INR,2026-08-01,pending_settlement
-INV-0095,ORD-2026-0095,3200.00,CUST-095,INR,2026-08-01,refunded
-INV-0097,ORD-2026-0097,6800.00,CUST-097,INR,2026-08-01,paid
-INV-0100,ORD-2026-0100,7777.00,CUST-100,INR,2026-08-01,paid`;
-
-      const settlementData = `settlement_id,order_id,amount,fee,tax,currency,settled_at,utr,status
-SET-0001,ORD-2026-0001,15000.00,0.00,0.00,INR,2026-08-03,UTR202608000001,settled
-SET-0087,ORD-2026-0087,11970.00,30.00,0.00,INR,2026-08-03,UTR202608000087,settled
-SET-0088,ORD-2026-0088,24955.00,45.00,0.00,INR,2026-08-03,UTR202608000088,settled
-SET-0093,ORD-2026-0093,9500.00,0.00,0.00,INR,2026-08-09,UTR202608000093,pending
-SET-0095,ORD-2026-0095,3200.00,0.00,0.00,INR,2026-08-03,UTR202608000095,settled
-SET-0097,ORD-2026-0097,6800.00,0.00,0.00,INR,2026-08-03,UTR202608000097,settled
-SET-0100,ORD-2026-0100,5432.10,0.00,0.00,INR,2026-08-03,UTR202608000100,settled`;
-
-      const bankData = `bank_txn_id,amount,type,utr,value_date,description
-BNK-0001,15000.00,credit,UTR202608000001,2026-08-03,Razorpay Payout
-BNK-0087,11970.00,credit,UTR202608000087,2026-08-03,Razorpay Payout
-BNK-0088,24955.00,credit,UTR202608000088,2026-08-03,Razorpay Payout
-BNK-0093,9500.00,credit,UTR202608000093,2026-08-09,Delayed Payout
-BNK-0095,-3200.00,debit,UTR202608000095,2026-08-03,Customer Refund Reversal
-BNK-0097,6800.00,credit,UTR202608000097,2026-08-03,Razorpay Payout
-BNK-0100,5432.10,credit,UTR202608000100,2026-08-03,Payout`;
-
-      const setFile = new File([settlementData], "settlements.csv", { type: "text/csv" });
-      const bnkFile = new File([bankData], "bank_statements.csv", { type: "text/csv" });
-      const invFile = new File([invoiceData], "invoices.csv", { type: "text/csv" });
-
-      setSettlementFile(setFile);
-      setBankFile(bnkFile);
-      setInvoiceFile(invFile);
-
       setProcessingState("matching");
       setTimeout(() => setProcessingState("verifying"), 400);
 
-      const formData = new FormData();
-      formData.append("settlement_csv", setFile);
-      formData.append("bank_csv", bnkFile);
-      formData.append("invoice_csv", invFile);
-
-      const res = await fetch(`${API_BASE}/api/v1/batches`, {
+      const res = await fetch(`${API_BASE}/api/v1/batches/demo`, {
         method: "POST",
-        body: formData,
       });
 
       if (!res.ok) {
-        throw new Error("Failed to process demo batch.");
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || "Failed to process demo batch.");
       }
 
       const data = await res.json();
