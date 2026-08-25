@@ -4,7 +4,7 @@ import time
 import uuid
 from decimal import Decimal
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Response, status
 from fastapi.responses import PlainTextResponse
@@ -14,10 +14,12 @@ from pydantic import BaseModel
 
 from backend.db.session import get_db, DATABASE_URL
 from backend.db.models import Batch, Record, Match, AIVerification, ExceptionRecord, MetricsSnapshot
+from backend.config.fee_rules import FeeConfig, load_fee_config
 from backend.parser import (
     InvoiceParser,
     SettlementParser,
     BankStatementParser,
+    SmartCSVParser,
     SchemaValidationError,
     InvalidCSVFormatError,
     EmptyFileError,
@@ -74,13 +76,18 @@ def health_check(db: Session = Depends(get_db)):
 # Pipeline Execution Engine
 # ---------------------------------------------------------------------------
 
-def process_reconciliation_batch(db: Session, batch_id: str) -> MetricsSnapshot:
+def process_reconciliation_batch(
+    db: Session,
+    batch_id: str,
+    fee_config: Optional[Union[FeeConfig, str, dict]] = None,
+    ground_truth: Optional[Union[List[Dict[str, Any]], Dict[str, Any], str]] = None,
+) -> MetricsSnapshot:
     """
     Executes the end-to-end reconciliation pipeline:
     1. Deterministic Rule Matching (86%)
     2. Finance Verification Engine (AI) for rule misses (6%)
     3. Exception Classification for unresolved records (8%)
-    4. Metrics Computation & Snapshot Persistence
+    4. Metrics Computation & Snapshot Persistence (with ground-truth validation if available)
     """
     start_time = time.time()
     batch = db.query(Batch).filter(Batch.id == batch_id).first()
@@ -89,6 +96,29 @@ def process_reconciliation_batch(db: Session, batch_id: str) -> MetricsSnapshot:
 
     batch.status = "processing"
     db.commit()
+
+    # Ground truth mapping: keyed by order_id
+    gt_by_order: Optional[Dict[str, Any]] = None
+    if ground_truth is not None:
+        if isinstance(ground_truth, list):
+            gt_by_order = {item["order_id"]: item for item in ground_truth if isinstance(item, dict) and "order_id" in item}
+        elif isinstance(ground_truth, dict):
+            if all(isinstance(v, dict) for v in ground_truth.values()):
+                gt_by_order = ground_truth
+            elif "order_id" in ground_truth:
+                gt_by_order = {ground_truth["order_id"]: ground_truth}
+        elif isinstance(ground_truth, str) and os.path.isfile(ground_truth):
+            with open(ground_truth, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    gt_by_order = {item["order_id"]: item for item in data if isinstance(item, dict) and "order_id" in item}
+    elif isinstance(fee_config, str):
+        # Auto-detect merchant profile ground truth if exists
+        m_gt_path = os.path.join("backend/synthetic-data/merchants", fee_config.lower(), "ground_truth.json")
+        if os.path.isfile(m_gt_path):
+            with open(m_gt_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                gt_by_order = {item["order_id"]: item for item in data if isinstance(item, dict) and "order_id" in item}
 
     # Load normalized records for this batch
     records = db.query(Record).filter(Record.batch_id == batch_id).all()
@@ -128,6 +158,13 @@ def process_reconciliation_batch(db: Session, batch_id: str) -> MetricsSnapshot:
     ai_verified_count = 0
     exceptions_count = 0
 
+    has_gt = gt_by_order is not None
+    tp = 0 if has_gt else None
+    fp = 0 if has_gt else None
+    fn = 0 if has_gt else None
+    ai_correct = 0 if has_gt else None
+    ai_total = 0 if has_gt else None
+
     # Clean existing matches for idempotency
     db.query(Match).filter(Match.batch_id == batch_id).delete()
     db.commit()
@@ -138,6 +175,8 @@ def process_reconciliation_batch(db: Session, batch_id: str) -> MetricsSnapshot:
     for settle in norm_settlements:
         inv = inv_by_order.get(settle.order_id)
         bank = bank_by_utr.get(settle.reference_number)
+        gt_item = gt_by_order.get(settle.order_id) if has_gt else None
+        expected_res = gt_item.get("expected_resolution") if gt_item else None
 
         if inv:
             processed_inv_ids.add(inv.transaction_id)
@@ -153,6 +192,7 @@ def process_reconciliation_batch(db: Session, batch_id: str) -> MetricsSnapshot:
                 settlement=settle,
                 bank=bank,
                 duplicate_order_ids=duplicates,
+                fee_config=fee_config,
             )
 
         match_id = str(uuid.uuid4())
@@ -172,6 +212,11 @@ def process_reconciliation_batch(db: Session, batch_id: str) -> MetricsSnapshot:
             )
             db.add(match_row)
             rule_matches_count += 1
+            if has_gt:
+                if expected_res in ("rule", "exact", "fee_deduction", "gst_deduction", "tds_deduction"):
+                    tp += 1
+                else:
+                    fp += 1
         else:
             # Step 2: Pass miss to Finance Verification Engine (AI)
             ai_res = verify_discrepancy(
@@ -197,6 +242,13 @@ def process_reconciliation_batch(db: Session, batch_id: str) -> MetricsSnapshot:
                 )
                 db.add(match_row)
                 ai_verified_count += 1
+                if has_gt:
+                    ai_total += 1
+                    if expected_res == "ai":
+                        tp += 1
+                        ai_correct += 1
+                    else:
+                        fp += 1
             else:
                 # Step 3: Exception Classification (Unresolved / Disagreement)
                 match_row = Match(
@@ -212,6 +264,14 @@ def process_reconciliation_batch(db: Session, batch_id: str) -> MetricsSnapshot:
                 )
                 db.add(match_row)
                 exceptions_count += 1
+                if has_gt:
+                    if expected_res == "ai":
+                        ai_total += 1
+                        fn += 1
+                    elif expected_res in ("rule", "exact", "fee_deduction", "gst_deduction", "tds_deduction"):
+                        fn += 1
+                    elif expected_res == "exception":
+                        pass  # True negative exception
 
                 # Classify into standard category
                 if settle.status == "pending" or (inv and inv.status == "pending_settlement"):
@@ -247,14 +307,14 @@ def process_reconciliation_batch(db: Session, batch_id: str) -> MetricsSnapshot:
 
     metrics = calculate_metrics(
         total_records=total_processed,
-        true_positives=rule_matches_count + ai_verified_count,
-        false_positives=0,
-        false_negatives=0,
+        true_positives=tp,
+        false_positives=fp,
+        false_negatives=fn,
         rule_matches=rule_matches_count,
         ai_verified=ai_verified_count,
         exceptions=exceptions_count,
-        ai_correct=ai_verified_count,
-        ai_total=ai_verified_count + exceptions_count,
+        ai_correct=ai_correct,
+        ai_total=ai_total,
         processing_time_seconds=processing_time,
     )
 
@@ -266,7 +326,12 @@ def process_reconciliation_batch(db: Session, batch_id: str) -> MetricsSnapshot:
         ai_verified=metrics.ai_verified_count,
         needs_review=metrics.exceptions_count,
         match_rate=Decimal(str(metrics.match_rate)),
-        precision=Decimal(str(metrics.precision)),
+        precision=Decimal(str(metrics.precision)) if metrics.precision is not None else None,
+        recall=Decimal(str(metrics.recall)) if metrics.recall is not None else None,
+        true_positives=metrics.true_positives,
+        false_positives=metrics.false_positives,
+        false_negatives=metrics.false_negatives,
+        ai_accuracy=Decimal(str(metrics.ai_verification_accuracy)) if metrics.ai_verification_accuracy is not None else None,
         processing_time_seconds=Decimal(str(metrics.processing_time_seconds)),
         manual_hours_saved=Decimal(str(metrics.manual_hours_saved)),
     )
@@ -287,37 +352,50 @@ async def upload_batch(
     settlement_csv: UploadFile = File(...),
     bank_csv: UploadFile = File(...),
     invoice_csv: UploadFile = File(...),
+    ground_truth_json: Optional[UploadFile] = File(None),
+    merchant_type: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
     """
     POST /batches: Upload 3 CSV files, validate schemas, persist records,
-    and trigger automated reconciliation pipeline.
+    and trigger automated reconciliation pipeline with intelligent schema detection.
+    Optionally accepts ground_truth_json to compute live verification metrics.
     """
     settle_bytes = await settlement_csv.read()
     bank_bytes = await bank_csv.read()
     inv_bytes = await invoice_csv.read()
 
-    # FR-2: Validate schemas against expected columns
+    # FR-2: Validate schemas against expected columns with intelligent schema mapping
     try:
-        settle_df = SettlementParser().parse(settle_bytes)
+        settle_df, _ = SmartCSVParser("settlement").parse(settle_bytes)
     except SchemaValidationError as e:
         raise HTTPException(status_code=422, detail=f"Settlement CSV error: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Settlement CSV unparseable: {str(e)}")
 
     try:
-        bank_df = BankStatementParser().parse(bank_bytes)
+        bank_df, _ = SmartCSVParser("bank").parse(bank_bytes)
     except SchemaValidationError as e:
         raise HTTPException(status_code=422, detail=f"Bank CSV error: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Bank CSV unparseable: {str(e)}")
 
     try:
-        inv_df = InvoiceParser().parse(inv_bytes)
+        inv_df, _ = SmartCSVParser("invoice").parse(inv_bytes)
     except SchemaValidationError as e:
         raise HTTPException(status_code=422, detail=f"Invoice CSV error: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invoice CSV unparseable: {str(e)}")
+
+    gt_data = None
+    if ground_truth_json is not None:
+        try:
+            gt_bytes = await ground_truth_json.read()
+            if gt_bytes:
+                import json as _json
+                gt_data = _json.loads(gt_bytes.decode("utf-8"))
+        except Exception:
+            gt_data = None
 
     # Create Batch
     batch = Batch(
@@ -340,7 +418,7 @@ async def upload_batch(
     persist_normalized_records(db, bnk_records, batch_id=batch.id)
 
     # Trigger pipeline
-    process_reconciliation_batch(db, batch.id)
+    process_reconciliation_batch(db, batch.id, fee_config=merchant_type, ground_truth=gt_data)
     db.refresh(batch)
 
     return {
@@ -360,6 +438,7 @@ def trigger_demo_batch(db: Session = Depends(get_db)):
     settle_path = os.path.join(data_dir, "settlements.csv")
     bank_path = os.path.join(data_dir, "bank_statements.csv")
     inv_path = os.path.join(data_dir, "invoices.csv")
+    gt_path = os.path.join(data_dir, "ground_truth.json")
 
     settle_df = SettlementParser().parse(settle_path)
     bank_df = BankStatementParser().parse(bank_path)
@@ -383,7 +462,13 @@ def trigger_demo_batch(db: Session = Depends(get_db)):
     persist_normalized_records(db, set_records, batch_id=batch.id)
     persist_normalized_records(db, bnk_records, batch_id=batch.id)
 
-    process_reconciliation_batch(db, batch.id)
+    gt_data = None
+    if os.path.isfile(gt_path):
+        with open(gt_path, "r", encoding="utf-8") as f:
+            import json as _json
+            gt_data = _json.load(f)
+
+    process_reconciliation_batch(db, batch.id, ground_truth=gt_data)
     db.refresh(batch)
 
     return {
@@ -603,7 +688,12 @@ def get_batch_metrics(batch_id: str, db: Session = Depends(get_db)):
             "ai_verified": 0,
             "needs_review": 0,
             "match_rate": 0.0,
-            "precision": 0.0,
+            "precision": None,
+            "recall": None,
+            "true_positives": None,
+            "false_positives": None,
+            "false_negatives": None,
+            "ai_verification_accuracy": None,
             "processing_time_seconds": 0.0,
             "manual_hours_saved": 0.0,
         }
@@ -613,7 +703,12 @@ def get_batch_metrics(batch_id: str, db: Session = Depends(get_db)):
         "ai_verified": snapshot.ai_verified,
         "needs_review": snapshot.needs_review,
         "match_rate": float(snapshot.match_rate),
-        "precision": float(snapshot.precision),
+        "precision": float(snapshot.precision) if snapshot.precision is not None else None,
+        "recall": float(snapshot.recall) if snapshot.recall is not None else None,
+        "true_positives": snapshot.true_positives,
+        "false_positives": snapshot.false_positives,
+        "false_negatives": snapshot.false_negatives,
+        "ai_verification_accuracy": float(snapshot.ai_accuracy) if snapshot.ai_accuracy is not None else None,
         "processing_time_seconds": float(snapshot.processing_time_seconds),
         "manual_hours_saved": float(snapshot.manual_hours_saved),
     }
