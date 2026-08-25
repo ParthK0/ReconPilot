@@ -1,6 +1,6 @@
 {
-  "batch_id": "e73389b7-bbc4-4e2e-bb94-3a51fff328e1",
-  "timestamp": 1787570469.3298252,
+  "batch_id": "aea27e13-4630-48b7-96e6-e462237ef33d",
+  "timestamp": 1787569294.126322,
   "total_records": 100,
   "matched_count": 92,
   "rule_matches_count": 86,
@@ -23,10 +23,10 @@
   "engine_correct_decisions": 14,
   "engine_accuracy": 1.0,
   "engine_reason_accuracy_on_matches": 1.0,
-  "processing_time_seconds": 0.43497299999944516,
+  "processing_time_seconds": 0.5497921999995015,
   "manual_minutes_baseline": 300.0,
-  "residual_review_minutes": 24.00724954999999,
-  "manual_hours_saved": 4.599879174166667,
+  "residual_review_minutes": 24.009163203333326,
+  "manual_hours_saved": 4.599847279944444,
   "target_comparisons": {
     "match_rate": {
       "actual": 0.92,
@@ -57,7 +57,7 @@
       "status": "PASSED"
     },
     "processing_time": {
-      "actual_seconds": 0.43497299999944516,
+      "actual_seconds": 0.5497921999995015,
       "target_seconds": 30.0,
       "stretch_seconds": 15.0,
       "meets_target": true,
