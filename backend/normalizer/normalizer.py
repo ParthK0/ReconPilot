@@ -7,6 +7,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.db.models import Record
+from backend.normalizer.data_cleaners import (
+    clean_currency,
+    clean_date,
+    clean_reference,
+    clean_order_id,
+    clean_status,
+)
 
 
 class NormalizedRecord(BaseModel):
@@ -29,28 +36,13 @@ class NormalizedRecord(BaseModel):
 
 
 def parse_date_str(val: Any) -> date:
-    """Robust date parsing for varied date string formats."""
-    if isinstance(val, date):
-        return val
-    if isinstance(val, datetime):
-        return val.date()
-    val_str = str(val).strip()
-    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%m/%d/%Y"):
-        try:
-            return datetime.strptime(val_str, fmt).date()
-        except ValueError:
-            continue
-    raise ValueError(f"Unable to parse date string: '{val_str}'")
+    """Robust date parsing for varied date string formats (delegates to clean_date)."""
+    return clean_date(val)
 
 
 def _clean_decimal(val: Any, default: Decimal = Decimal("0.00")) -> Decimal:
-    """Safely converts arbitrary values to Decimal."""
-    if val is None or pd.isna(val) or str(val).strip() == "":
-        return default
-    try:
-        return Decimal(str(val).strip())
-    except Exception:
-        return default
+    """Safely converts arbitrary values to Decimal (delegates to clean_currency)."""
+    return clean_currency(val, default=default)
 
 
 def _clean_str(val: Any) -> Optional[str]:
@@ -64,15 +56,17 @@ def _clean_str(val: Any) -> Optional[str]:
 def normalize_invoice_row(row: Dict[str, Any], batch_id: Optional[str] = None) -> NormalizedRecord:
     """Normalizes a single invoice CSV row into the unified record schema."""
     raw = {k: (None if pd.isna(v) else v) for k, v in row.items()}
+    # Resolve invoice date from invoice_date or generic date/created_at
+    inv_date_val = row.get("invoice_date") or row.get("date") or row.get("created_at") or row.get("txn_date")
     return NormalizedRecord(
         batch_id=batch_id,
         source_type="invoice",
-        transaction_id=str(row["invoice_id"]).strip(),
-        order_id=_clean_str(row.get("order_id")),
-        amount=_clean_decimal(row["amount"]),
-        txn_date=parse_date_str(row["invoice_date"]),
+        transaction_id=str(row.get("invoice_id") or row.get("transaction_id") or uuid.uuid4()).strip(),
+        order_id=clean_order_id(row.get("order_id")),
+        amount=clean_currency(row["amount"]),
+        txn_date=clean_date(inv_date_val),
         reference_number=None,
-        status=str(row.get("status", "paid")).strip(),
+        status=clean_status(row.get("status"), default="paid"),
         fees=Decimal("0.00"),
         gst=Decimal("0.00"),
         tds=Decimal("0.00"),
@@ -83,18 +77,19 @@ def normalize_invoice_row(row: Dict[str, Any], batch_id: Optional[str] = None) -
 def normalize_settlement_row(row: Dict[str, Any], batch_id: Optional[str] = None) -> NormalizedRecord:
     """Normalizes a single Razorpay settlement CSV row into the unified record schema."""
     raw = {k: (None if pd.isna(v) else v) for k, v in row.items()}
+    set_date_val = row.get("settlement_date") or row.get("date") or row.get("payout_date") or row.get("txn_date")
     return NormalizedRecord(
         batch_id=batch_id,
         source_type="settlement",
-        transaction_id=str(row["settlement_id"]).strip(),
-        order_id=_clean_str(row.get("order_id")),
-        amount=_clean_decimal(row["amount"]),
-        txn_date=parse_date_str(row["settlement_date"]),
-        reference_number=_clean_str(row.get("reference_number")),
-        status=str(row.get("status", "settled")).strip(),
-        fees=_clean_decimal(row.get("fees", 0)),
-        gst=_clean_decimal(row.get("gst", 0)),
-        tds=_clean_decimal(row.get("tds", 0)),
+        transaction_id=str(row.get("settlement_id") or row.get("transaction_id") or uuid.uuid4()).strip(),
+        order_id=clean_order_id(row.get("order_id")),
+        amount=clean_currency(row["amount"]),
+        txn_date=clean_date(set_date_val),
+        reference_number=clean_reference(row.get("reference_number")),
+        status=clean_status(row.get("status"), default="settled"),
+        fees=clean_currency(row.get("fees", 0)),
+        gst=clean_currency(row.get("gst", 0)),
+        tds=clean_currency(row.get("tds", 0)),
         raw_payload=raw,
     )
 
@@ -102,15 +97,16 @@ def normalize_settlement_row(row: Dict[str, Any], batch_id: Optional[str] = None
 def normalize_bank_row(row: Dict[str, Any], batch_id: Optional[str] = None) -> NormalizedRecord:
     """Normalizes a single bank statement CSV row into the unified record schema."""
     raw = {k: (None if pd.isna(v) else v) for k, v in row.items()}
+    bnk_date_val = row.get("txn_date") or row.get("date") or row.get("posting_date")
     return NormalizedRecord(
         batch_id=batch_id,
         source_type="bank",
-        transaction_id=str(row["bank_txn_id"]).strip(),
+        transaction_id=str(row.get("bank_txn_id") or row.get("transaction_id") or uuid.uuid4()).strip(),
         order_id=None,
-        amount=_clean_decimal(row["amount"]),
-        txn_date=parse_date_str(row["txn_date"]),
-        reference_number=_clean_str(row.get("reference_number")),
-        status=str(row.get("status", "credited")).strip(),
+        amount=clean_currency(row["amount"]),
+        txn_date=clean_date(bnk_date_val),
+        reference_number=clean_reference(row.get("reference_number")),
+        status=clean_status(row.get("status"), default="credited"),
         fees=Decimal("0.00"),
         gst=Decimal("0.00"),
         tds=Decimal("0.00"),
