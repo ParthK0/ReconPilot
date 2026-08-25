@@ -6,9 +6,10 @@ from being promoted to a deterministic rule match.
 """
 
 from decimal import Decimal, ROUND_HALF_UP
-from typing import List
-
+from typing import List, Optional, Union
 from pydantic import BaseModel, Field
+
+from backend.config.fee_rules import FeeConfig, DEFAULT_FEE_CONFIG, load_fee_config
 
 
 ONE_PAISA = Decimal("0.01")
@@ -46,18 +47,28 @@ def explain_fixed_schedule_deduction(
     gst: Decimal = Decimal("0.00"),
     tds: Decimal = Decimal("0.00"),
     tolerance: Decimal = ONE_PAISA,
+    fee_config: Optional[Union[FeeConfig, str, dict]] = None,
 ) -> AdjustedAmountBreakdown:
-    """Explain a mismatch only when it follows ReconPilot's fixed rate card.
+    """Explain a mismatch when it follows the configured rate card (or standard default).
 
     The expected values are rounded to paisa before comparison, matching the
-    synthetic-data generator.  GST is 18% of the standard 2% fee (0.36% of
-    the invoice), allowing records that contain only the applicable charges.
+    synthetic-data generator. GST is calculated as a % of MDR fees, allowing
+    records that contain only the applicable charges.
     """
+    cfg = load_fee_config(fee_config) if fee_config is not None else DEFAULT_FEE_CONFIG
+    mdr_rate = cfg.mdr_rate
+    gst_rate = cfg.gst_rate
+    tds_rate = cfg.tds_rate
+
     charges = []
+    expected_fee = _to_paisa(invoice_amount * mdr_rate)
+    expected_gst = _to_paisa(expected_fee * gst_rate)
+    expected_tds = _to_paisa(invoice_amount * tds_rate)
+
     expected_charges = {
-        "fees": _to_paisa(invoice_amount * STANDARD_FEE_RATE),
-        "gst": _to_paisa(invoice_amount * STANDARD_FEE_RATE * STANDARD_GST_RATE),
-        "tds": _to_paisa(invoice_amount * STANDARD_TDS_RATE),
+        "fees": expected_fee,
+        "gst": expected_gst,
+        "tds": expected_tds,
     }
     actual_charges = {"fees": fees, "gst": gst, "tds": tds}
 

@@ -1,11 +1,12 @@
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
-from typing import List, Dict, Optional, Tuple, Any, Set
+from typing import List, Dict, Optional, Tuple, Any, Set, Union
 from pydantic import BaseModel, Field
 
+from backend.config.fee_rules import FeeConfig, DEFAULT_FEE_CONFIG, load_fee_config
 from backend.normalizer.normalizer import NormalizedRecord
 
-# Documented standard rate schedule for deterministic rule matching
+# Documented standard rate schedule for deterministic rule matching (defaults)
 STANDARD_FEE_RATE = Decimal("0.02")  # 2.0% standard Razorpay MDR
 STANDARD_GST_RATE = Decimal("0.18")  # 18.0% GST on MDR fees
 STANDARD_TDS_RATE = Decimal("0.01")  # 1.0% TDS under Section 194O
@@ -231,15 +232,16 @@ def match_fee_gst_tds_adjusted_amount(
     invoice: Optional[NormalizedRecord] = None,
     settlement: Optional[NormalizedRecord] = None,
     bank: Optional[NormalizedRecord] = None,
+    fee_config: Optional[Union[FeeConfig, str, dict]] = None,
 ) -> RuleMatchResult:
     """
-    Rule 5: Matches invoice and settlement using standard deterministic fee/GST/TDS formulas:
-    - Standard Fee: exactly 2.0% MDR
-    - Standard GST: exactly 18.0% of fee
-    - Standard TDS: exactly 1.0% of invoice amount
+    Rule 5: Matches invoice and settlement using configurable deterministic fee/GST/TDS formulas:
+    - MDR Fee: fee_config.mdr (default 2.0%)
+    - GST: fee_config.gst (default 18.0% of fee)
+    - TDS: fee_config.tds (default 1.0% of invoice amount)
     
     Reconciles if settlement.amount == invoice.amount - fees - gst - tds AND the charges match
-    the standard rate schedule. Non-standard one-off manual adjustments (e.g. Rs 30 on Rs 12,000)
+    the rate schedule. Non-standard one-off manual adjustments (e.g. Rs 30 on Rs 12,000)
     will NOT match this rule, properly deferring to Phase 4 AI verification.
     """
     if not (invoice and settlement):
@@ -257,10 +259,12 @@ def match_fee_gst_tds_adjusted_amount(
     if bank and (bank.status != "credited" or bank.amount != settlement.amount):
         return RuleMatchResult(is_matched=False)
 
-    # 1. Calculate standard rate deductions
-    std_fee = round_paisa(invoice.amount * STANDARD_FEE_RATE)
-    std_gst = round_paisa(std_fee * STANDARD_GST_RATE)
-    std_tds = round_paisa(invoice.amount * STANDARD_TDS_RATE)
+    cfg = load_fee_config(fee_config) if fee_config is not None else DEFAULT_FEE_CONFIG
+
+    # 1. Calculate rate deductions from config
+    std_fee = round_paisa(invoice.amount * cfg.mdr_rate)
+    std_gst = round_paisa(std_fee * cfg.gst_rate)
+    std_tds = round_paisa(invoice.amount * cfg.tds_rate)
 
     # 2. Check if settlement amounts and recorded fees match standard formulas
     actual_fee = settlement.fees
@@ -271,7 +275,7 @@ def match_fee_gst_tds_adjusted_amount(
     if total_deductions <= Decimal("0.00"):
         return RuleMatchResult(is_matched=False)
 
-    # Validate that every non-zero deduction matches the standard rate card exactly
+    # Validate that every non-zero deduction matches the rate card exactly
     charges_list: List[ChargeItem] = []
 
     if actual_fee > Decimal("0.00"):
@@ -304,7 +308,7 @@ def match_fee_gst_tds_adjusted_amount(
         invoice_record=invoice,
         settlement_record=settlement,
         bank_record=bank,
-        notes=f"Reconciled via standard {named_charges}.",
+        notes=f"Reconciled via {cfg.merchant_type} rate schedule: {named_charges}.",
         charge_breakdown=charge_breakdown,
     )
 
@@ -326,19 +330,23 @@ def apply_rules_in_order(
     invoice: Optional[NormalizedRecord] = None,
     settlement: Optional[NormalizedRecord] = None,
     bank: Optional[NormalizedRecord] = None,
-    max_date_window_days: int = 2,
+    max_date_window_days: Optional[int] = None,
     duplicate_order_ids: Optional[Set[str]] = None,
+    fee_config: Optional[Union[FeeConfig, str, dict]] = None,
 ) -> RuleMatchResult:
     """
     FR-4: Applies rules in strict priority order:
     1. Exact Order ID
     2. Exact UTR / reference_number
     3. Exact amount (no adjustment)
-    4. Settlement-date window (T+2 days)
-    5. Fee / GST / TDS adjusted amount (standard deterministic rate formulas)
+    4. Settlement-date window (T+2 days or config delay window)
+    5. Fee / GST / TDS adjusted amount (configurable deterministic rate formulas)
     
     Returns the first matching RuleMatchResult (100% confidence) or an unmatched result.
     """
+    cfg = load_fee_config(fee_config) if fee_config is not None else DEFAULT_FEE_CONFIG
+    window_days = max_date_window_days if max_date_window_days is not None else cfg.settlement_delay_days
+
     # If invoice has a duplicate order ID conflict, do not auto-match; route to exceptions
     if invoice and duplicate_order_ids and invoice.order_id in duplicate_order_ids:
         return RuleMatchResult(
@@ -351,7 +359,7 @@ def apply_rules_in_order(
         invoice=invoice,
         settlement=settlement,
         bank=bank,
-        max_days=max_date_window_days,
+        max_days=window_days,
         duplicate_order_ids=duplicate_order_ids,
     )
     if res1.is_matched:
@@ -363,7 +371,7 @@ def apply_rules_in_order(
         return res2
 
     # 3. Exact Amount
-    res3 = match_exact_amount(invoice=invoice, settlement=settlement, bank=bank, max_days=max_date_window_days)
+    res3 = match_exact_amount(invoice=invoice, settlement=settlement, bank=bank, max_days=window_days)
     if res3.is_matched:
         return res3
 
@@ -372,13 +380,13 @@ def apply_rules_in_order(
         invoice=invoice,
         settlement=settlement,
         bank=bank,
-        max_days=max_date_window_days,
+        max_days=window_days,
     )
     if res4.is_matched:
         return res4
 
     # 5. Fee / GST / TDS Adjusted Amount
-    res5 = match_fee_gst_tds_adjusted_amount(invoice=invoice, settlement=settlement, bank=bank)
+    res5 = match_fee_gst_tds_adjusted_amount(invoice=invoice, settlement=settlement, bank=bank, fee_config=cfg)
     if res5.is_matched:
         return res5
 
