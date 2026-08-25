@@ -2,7 +2,7 @@ import io
 import os
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Dict, List, Any, Union, BinaryIO, TextIO
+from typing import Dict, List, Any, Union, BinaryIO, TextIO, Tuple
 import pandas as pd
 
 
@@ -187,6 +187,68 @@ class BankStatementParser(BaseCSVParser):
         return "bank"
 
 
+class SmartCSVParser:
+    """
+    Schema-Agnostic Intelligent CSV Parser.
+    Automatically maps unknown, dirty, or merchant-specific column names into canonical schema.
+    """
+
+    def __init__(self, source_type: str):
+        self.source_type = source_type.strip().lower()
+        self.base_parser = get_parser(self.source_type)
+
+    def parse(
+        self,
+        source: Union[str, bytes, Path, TextIO, BinaryIO],
+        auto_map_schema: bool = True,
+    ) -> Tuple[pd.DataFrame, Any]:
+        """
+        Parses CSV source, automatically detecting and remapping non-standard column names if necessary.
+        Returns a tuple of (canonical_df, schema_mapping).
+        """
+        from backend.schema_mapper.mapper import default_schema_mapper, SchemaMapping
+
+        df = self.base_parser._read_to_dataframe(source)
+        # First check if schema is already perfectly matching
+        try:
+            self.base_parser.validate_schema(df.copy())
+            mapping = default_schema_mapper.map_columns(list(df.columns), self.source_type)
+            return df, mapping
+        except SchemaValidationError:
+            if not auto_map_schema:
+                raise
+            # Schema failed strict check -> run schema mapper
+            remapped_df, mapping = default_schema_mapper.remap_dataframe(df, self.source_type)
+            if not mapping.is_valid:
+                # If still missing required columns after AI/heuristic mapping, raise SchemaValidationError
+                raise SchemaValidationError(
+                    f"Schema mapping failed for '{self.source_type}' CSV. "
+                    f"Missing required column(s): {', '.join(mapping.missing_required)}. "
+                    f"Expected: {', '.join(self.base_parser.expected_columns)}. "
+                    f"Found (raw): {', '.join(df.columns)}.",
+                    missing_columns=mapping.missing_required,
+                    expected_columns=self.base_parser.expected_columns,
+                    actual_columns=list(df.columns),
+                    source_type=self.source_type,
+                )
+            return remapped_df, mapping
+
+
+def get_smart_parser(source_type: str) -> SmartCSVParser:
+    """Factory helper to obtain a SmartCSVParser."""
+    return SmartCSVParser(source_type)
+
+
+def parse_smart_csv(
+    content: Union[str, bytes, Path, TextIO, BinaryIO],
+    source_type: str,
+    auto_map: bool = True,
+) -> Tuple[pd.DataFrame, Any]:
+    """Convenience helper for parsing CSV with intelligent schema mapping."""
+    parser = get_smart_parser(source_type)
+    return parser.parse(content, auto_map_schema=auto_map)
+
+
 def get_parser(source_type: str) -> BaseCSVParser:
     """
     Factory function to retrieve the appropriate parser for a given source type.
@@ -212,3 +274,4 @@ def parse_csv_content(content: Union[str, bytes, Path, TextIO, BinaryIO], source
     """Convenience helper for parsing CSV content with schema validation."""
     parser = get_parser(source_type)
     return parser.parse(content)
+
