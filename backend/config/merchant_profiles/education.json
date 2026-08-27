@@ -1,0 +1,9 @@
+{
+  "merchant_type": "education",
+  "mdr": 1.2,
+  "gst": 18.0,
+  "tds": 0.0,
+  "platform_fee": 0.0,
+  "convenience_fee": 0.5,
+  "settlement_delay_days": 2
+}

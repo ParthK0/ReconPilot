@@ -1,3 +1,15 @@
+"""
+backend/schema_mapper/mapper.py
+===============================
+ReconPilot 2.0: Safe Schema Understanding & Column Mapping Engine.
+
+Maps unpredictable merchant CSV column names to ReconPilot's canonical schema with
+strict confidence threshold gating:
+- >= 0.95: Auto-Map (automatically applied with 100% confidence)
+- 0.80 - 0.94: Suggested Mapping (highlighted in UI for user confirmation)
+- < 0.80: Rejected / Requires Manual Mapping (safe failure without guessing)
+"""
+
 import json
 import os
 import re
@@ -10,12 +22,16 @@ from backend.parser.csv_parser import EXPECTED_COLUMNS
 from backend.schema_mapper.aliases import COLUMN_ALIASES
 
 
+AUTO_MAP_CONFIDENCE_THRESHOLD: float = 0.95
+
+
 class ColumnMappingResult(BaseModel):
     """Mapping result for a single input column."""
     original_name: str
     canonical_name: Optional[str] = None
     confidence: float = Field(ge=0.0, le=1.0)
     method: str  # "exact", "alias", "ai", "heuristic", "unmapped"
+    tier: str = "auto_map"  # "auto_map" (>=0.95), "suggest" (0.80-0.94), "reject" (<0.80)
     notes: Optional[str] = None
 
 
@@ -24,8 +40,12 @@ class SchemaMapping(BaseModel):
     source_type: str
     column_mappings: List[ColumnMappingResult] = Field(default_factory=list)
     rename_dict: Dict[str, str] = Field(default_factory=dict)
+    auto_rename_dict: Dict[str, str] = Field(default_factory=dict)
+    suggested_mappings: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    rejected_mappings: List[ColumnMappingResult] = Field(default_factory=list)
     missing_required: List[str] = Field(default_factory=list)
     is_valid: bool = False
+    requires_user_confirmation: bool = False
 
     @property
     def mapped_canonical_columns(self) -> List[str]:
@@ -42,7 +62,7 @@ def _normalize_col_name(col: str) -> str:
 
 class SchemaMapper:
     """
-    AI & Heuristic Schema Understanding Agent.
+    AI & Safe Heuristic Schema Understanding Agent.
     Maps unpredictable merchant CSV column names to ReconPilot's canonical schema.
     """
 
@@ -126,7 +146,7 @@ class SchemaMapper:
         sample_rows: Optional[List[Dict[str, Any]]] = None,
     ) -> SchemaMapping:
         """
-        Maps a list of raw column names to the canonical schema for source_type.
+        Maps a list of raw column names to the canonical schema for source_type with safety thresholds.
         """
         source_lower = source_type.strip().lower()
         if source_lower in ("bank", "bank_statement", "bank_statements"):
@@ -138,53 +158,81 @@ class SchemaMapper:
 
         results: List[ColumnMappingResult] = []
         rename_dict: Dict[str, str] = {}
+        auto_rename_dict: Dict[str, str] = {}
+        suggested: Dict[str, Dict[str, Any]] = {}
+        rejected: List[ColumnMappingResult] = []
         assigned_targets: set = set()
-        unmapped_inputs: List[str] = []
+        mapped_input_cols: set = set()
 
-        # 1. Exact Match Phase
+        # Step 1: Collect exact and alias candidate matches for all input columns
+        target_candidates: Dict[str, List[Tuple[str, str, float, str]]] = {}
+        for target in expected_targets:
+            target_candidates[target] = []
+
         for col in columns:
             norm_col = _normalize_col_name(col)
-            if norm_col in expected_targets and norm_col not in assigned_targets:
-                results.append(ColumnMappingResult(
-                    original_name=col,
-                    canonical_name=norm_col,
-                    confidence=1.0,
-                    method="exact",
-                    notes="Exact canonical name match.",
-                ))
-                rename_dict[col] = norm_col
-                assigned_targets.add(norm_col)
+            # Check exact match
+            if norm_col in expected_targets:
+                target_candidates[norm_col].append(
+                    (col, "exact", 1.0, "Exact canonical name match.")
+                )
             else:
-                unmapped_inputs.append(col)
-
-        # 2. Dictionary Alias Phase
-        remaining_inputs: List[str] = []
-        for col in unmapped_inputs:
-            norm_col = _normalize_col_name(col)
-            matched_target = None
-
-            for target, aliases in COLUMN_ALIASES.items():
-                if target in expected_targets and target not in assigned_targets:
-                    if norm_col in aliases or norm_col == target:
+                # Check dictionary alias
+                matched_target = None
+                for target, aliases in COLUMN_ALIASES.items():
+                    if target in expected_targets and (norm_col in aliases or norm_col == target):
                         matched_target = target
                         break
+                if matched_target:
+                    target_candidates[matched_target].append(
+                        (col, "alias", 0.96, f"Mapped via verified financial synonym dictionary to '{matched_target}'.")
+                    )
 
-            if matched_target:
-                results.append(ColumnMappingResult(
+        # Step 2: Resolve matches and detect ambiguities
+        for target in expected_targets:
+            candidates = target_candidates.get(target, [])
+            if len(candidates) == 1:
+                # Single unambiguous match -> auto_map
+                col, method, conf, notes = candidates[0]
+                res = ColumnMappingResult(
                     original_name=col,
-                    canonical_name=matched_target,
-                    confidence=0.95,
-                    method="alias",
-                    notes=f"Mapped via known alias dictionary to '{matched_target}'.",
-                ))
-                rename_dict[col] = matched_target
-                assigned_targets.add(matched_target)
-            else:
-                remaining_inputs.append(col)
+                    canonical_name=target,
+                    confidence=conf,
+                    method=method,
+                    tier="auto_map",
+                    notes=notes,
+                )
+                results.append(res)
+                rename_dict[col] = target
+                auto_rename_dict[col] = target
+                assigned_targets.add(target)
+                mapped_input_cols.add(col)
+            elif len(candidates) > 1:
+                # Ambiguity: multiple columns match the same canonical target
+                cand_names = [c[0] for c in candidates]
+                suggested[target] = {
+                    "source_column": ", ".join(cand_names),
+                    "candidates": cand_names,
+                    "confidence": 0.80,
+                    "method": "ambiguous_match",
+                    "notes": f"Multiple columns ({', '.join(cand_names)}) match canonical target '{target}'.",
+                }
+                for col, method, conf, notes in candidates:
+                    res = ColumnMappingResult(
+                        original_name=col,
+                        canonical_name=target,
+                        confidence=0.80,
+                        method="ambiguous",
+                        tier="suggest",
+                        notes=f"Ambiguous match for target '{target}' with multiple candidates ({', '.join(cand_names)}).",
+                    )
+                    results.append(res)
+                    mapped_input_cols.add(col)
 
-        # 3. AI / Heuristic Fallback Phase for remaining columns
+        # Step 3: AI & Safe Heuristic Fallback for remaining unmapped input columns
+        remaining_inputs = [col for col in columns if col not in mapped_input_cols]
         if remaining_inputs and (len(assigned_targets) < len(expected_targets)):
-            available_targets = [t for t in expected_targets if t not in assigned_targets]
+            available_targets = [t for t in expected_targets if t not in assigned_targets and t not in suggested]
             ai_mappings = self._call_llm_schema_detection(remaining_inputs, available_targets, sample_rows)
 
             for col in remaining_inputs:
@@ -192,17 +240,23 @@ class SchemaMapper:
                 ai_target = ai_mappings.get(col) or ai_mappings.get(norm_col)
 
                 if ai_target and ai_target in available_targets and ai_target not in assigned_targets:
-                    results.append(ColumnMappingResult(
+                    # AI confidence 0.90 -> Tier: suggest (requires confirmation)
+                    res = ColumnMappingResult(
                         original_name=col,
                         canonical_name=ai_target,
                         confidence=0.90,
                         method="ai",
-                        notes=f"AI inferred column mapping to '{ai_target}'.",
-                    ))
-                    rename_dict[col] = ai_target
-                    assigned_targets.add(ai_target)
+                        tier="suggest",
+                        notes=f"AI inferred column mapping to '{ai_target}'. Suggested for review.",
+                    )
+                    results.append(res)
+                    suggested[ai_target] = {
+                        "source_column": col,
+                        "confidence": 0.90,
+                        "method": "ai",
+                    }
                 else:
-                    # Heuristic substring check
+                    # Safe heuristic substring check
                     heuristic_target = None
                     for t in available_targets:
                         if t in norm_col or any(alias in norm_col for alias in COLUMN_ALIASES.get(t, [])):
@@ -210,33 +264,60 @@ class SchemaMapper:
                             break
                     
                     if heuristic_target and heuristic_target not in assigned_targets:
-                        results.append(ColumnMappingResult(
+                        # Heuristic confidence 0.85 -> Tier: suggest
+                        res = ColumnMappingResult(
                             original_name=col,
                             canonical_name=heuristic_target,
-                            confidence=0.75,
+                            confidence=0.85,
                             method="heuristic",
-                            notes=f"Heuristic pattern match to '{heuristic_target}'.",
-                        ))
-                        rename_dict[col] = heuristic_target
-                        assigned_targets.add(heuristic_target)
+                            tier="suggest",
+                            notes=f"Pattern similarity match to '{heuristic_target}'.",
+                        )
+                        results.append(res)
+                        suggested[heuristic_target] = {
+                            "source_column": col,
+                            "confidence": 0.85,
+                            "method": "heuristic",
+                        }
                     else:
-                        results.append(ColumnMappingResult(
+                        # Below threshold (<0.80) -> Tier: reject
+                        res = ColumnMappingResult(
                             original_name=col,
                             canonical_name=None,
                             confidence=0.0,
                             method="unmapped",
-                            notes="Column could not be mapped to any expected schema column.",
-                        ))
+                            tier="reject",
+                            notes="Column could not be safely mapped to any expected schema column.",
+                        )
+                        results.append(res)
+                        rejected.append(res)
+        elif remaining_inputs:
+            for col in remaining_inputs:
+                res = ColumnMappingResult(
+                    original_name=col,
+                    canonical_name=None,
+                    confidence=0.0,
+                    method="unmapped",
+                    tier="reject",
+                    notes="Column could not be safely mapped to any expected schema column.",
+                )
+                results.append(res)
+                rejected.append(res)
 
         missing = [target for target in expected_targets if target not in assigned_targets]
         is_valid = len(missing) == 0
+        has_suggested_required = any(target in suggested for target in missing)
 
         return SchemaMapping(
             source_type=source_type,
             column_mappings=results,
             rename_dict=rename_dict,
+            auto_rename_dict=auto_rename_dict,
+            suggested_mappings=suggested,
+            rejected_mappings=rejected,
             missing_required=missing,
             is_valid=is_valid,
+            requires_user_confirmation=has_suggested_required or len(rejected) > 0,
         )
 
     def remap_dataframe(self, df: pd.DataFrame, source_type: str) -> Tuple[pd.DataFrame, SchemaMapping]:

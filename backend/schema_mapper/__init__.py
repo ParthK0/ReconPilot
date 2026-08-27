@@ -1,4 +1,5 @@
 from backend.schema_mapper.mapper import (
+    AUTO_MAP_CONFIDENCE_THRESHOLD,
     ColumnMappingResult,
     SchemaMapping,
     SchemaMapper,
@@ -8,6 +9,7 @@ from backend.schema_mapper.mapper import (
 )
 
 __all__ = [
+    "AUTO_MAP_CONFIDENCE_THRESHOLD",
     "ColumnMappingResult",
     "SchemaMapping",
     "SchemaMapper",

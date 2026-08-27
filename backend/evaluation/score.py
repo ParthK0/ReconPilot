@@ -21,6 +21,10 @@ Outputs results to both a JSON file and a printed console summary.
 
 import os
 import sys
+
+# Ensure repository root is on sys.path for standalone script execution
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
 import time
 import json
 import uuid

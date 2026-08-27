@@ -1,0 +1,9 @@
+{
+  "merchant_type": "logistics",
+  "mdr": 1.8,
+  "gst": 18.0,
+  "tds": 2.0,
+  "platform_fee": 0.0,
+  "convenience_fee": 1.0,
+  "settlement_delay_days": 4
+}

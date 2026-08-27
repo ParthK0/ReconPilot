@@ -220,17 +220,44 @@ class SmartCSVParser:
             # Schema failed strict check -> run schema mapper
             remapped_df, mapping = default_schema_mapper.remap_dataframe(df, self.source_type)
             if not mapping.is_valid:
-                # If still missing required columns after AI/heuristic mapping, raise SchemaValidationError
-                raise SchemaValidationError(
-                    f"Schema mapping failed for '{self.source_type}' CSV. "
-                    f"Missing required column(s): {', '.join(mapping.missing_required)}. "
-                    f"Expected: {', '.join(self.base_parser.expected_columns)}. "
-                    f"Found (raw): {', '.join(df.columns)}.",
-                    missing_columns=mapping.missing_required,
-                    expected_columns=self.base_parser.expected_columns,
-                    actual_columns=list(df.columns),
-                    source_type=self.source_type,
-                )
+                suggested_missing = {
+                    target: mapping.suggested_mappings[target]
+                    for target in mapping.missing_required
+                    if target in mapping.suggested_mappings
+                }
+                unmappable_missing = [
+                    target for target in mapping.missing_required
+                    if target not in mapping.suggested_mappings
+                ]
+
+                if suggested_missing:
+                    details = [
+                        f"'{t}' (suggested '{s['source_column']}' via {s['method']}, confidence={s['confidence']:.2f})"
+                        for t, s in suggested_missing.items()
+                    ]
+                    if unmappable_missing:
+                        details.append(f"unmappable: {', '.join(unmappable_missing)}")
+                    raise SchemaValidationError(
+                        f"Schema validation failed for '{self.source_type}' CSV: requires user confirmation for low-confidence mapping(s). "
+                        f"Unresolved required field(s): {'; '.join(details)}. "
+                        f"Expected: {', '.join(self.base_parser.expected_columns)}. "
+                        f"Found (raw): {', '.join(df.columns)}.",
+                        missing_columns=mapping.missing_required,
+                        expected_columns=self.base_parser.expected_columns,
+                        actual_columns=list(df.columns),
+                        source_type=self.source_type,
+                    )
+                else:
+                    raise SchemaValidationError(
+                        f"Schema validation failed for '{self.source_type}' CSV: required column(s) could not be mapped by any method. "
+                        f"Missing required column(s): {', '.join(mapping.missing_required)}. "
+                        f"Expected: {', '.join(self.base_parser.expected_columns)}. "
+                        f"Found (raw): {', '.join(df.columns)}.",
+                        missing_columns=mapping.missing_required,
+                        expected_columns=self.base_parser.expected_columns,
+                        actual_columns=list(df.columns),
+                        source_type=self.source_type,
+                    )
             return remapped_df, mapping
 
 

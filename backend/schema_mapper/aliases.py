@@ -26,6 +26,15 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "billed_amount",
         "charge_amount",
         "final_amount",
+        "fare_amount",
+        "treatment_cost",
+        "remittance_amount",
+        "reload_amount",
+        "net_wallet_payout",
+        "semester_fee",
+        "cod_amount",
+        "net_cod_remittance",
+        "total_invoice_val",
     ],
     # Date fields
     "invoice_date": [
@@ -37,6 +46,11 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "created_date",
         "order_date",
         "date",
+        "booking_date",
+        "admission_date",
+        "txn_timestamp",
+        "registration_date",
+        "dispatch_date",
     ],
     "settlement_date": [
         "settled_at",
@@ -46,6 +60,9 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "value_date",
         "settled_date",
         "date",
+        "settlement_timestamp",
+        "credit_date",
+        "remittance_date",
     ],
     "txn_date": [
         "transaction_date",
@@ -54,6 +71,7 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "booking_date",
         "value_date",
         "statement_date",
+        "credit_date",
         "date",
     ],
     # Identifiers
@@ -67,6 +85,11 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "receipt_id",
         "receipt_no",
         "document_number",
+        "pnr_ticket_no",
+        "claim_invoice_no",
+        "wallet_txn_no",
+        "fee_receipt_no",
+        "waybill_no",
     ],
     "settlement_id": [
         "set_id",
@@ -75,6 +98,10 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "batch_id",
         "disbursement_id",
         "payout_ref",
+        "payout_batch_no",
+        "payout_ref_id",
+        "disbursement_no",
+        "remittance_id",
     ],
     "bank_txn_id": [
         "txn_id",
@@ -84,6 +111,11 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "entry_id",
         "line_id",
         "seq_no",
+        "bank_id",
+        "stmt_txn_id",
+        "bank_line_id",
+        "entry_ref",
+        "txn_seq",
     ],
     "order_id": [
         "order_number",
@@ -94,6 +126,12 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "client_order_id",
         "po_number",
         "reference_id",
+        "table_order_id",
+        "booking_id",
+        "patient_id",
+        "gamer_tag_id",
+        "enrollment_id",
+        "consignee_order_id",
     ],
     "reference_number": [
         "utr",
@@ -107,6 +145,9 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "reference",
         "payment_reference",
         "cheque_no",
+        "bank_utr",
+        "utr_ref",
+        "cheque_or_utr",
     ],
     # Status
     "status": [
@@ -116,6 +157,10 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "state",
         "settlement_status",
         "transaction_status",
+        "booking_status",
+        "discharge_status",
+        "fee_status",
+        "delivery_status",
     ],
     # Fees and Deductions
     "fees": [
@@ -129,6 +174,10 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "convenience_fee",
         "gateway_fee",
         "charges",
+        "tpa_service_fee",
+        "platform_commission",
+        "bank_subvention_fee",
+        "freight_charge",
     ],
     "gst": [
         "gst_amount",
@@ -139,6 +188,10 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "igst",
         "cgst_sgst",
         "vat",
+        "gst_deduction",
+        "gst_28_percent",
+        "tax_on_fee",
+        "gst_18",
     ],
     "tds": [
         "tds_amount",
@@ -147,6 +200,8 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "section_194o_tds",
         "194o_tds",
         "tax_deducted",
+        "tds_194b_deduction",
+        "tds_194c",
     ],
     # Descriptions & Customer
     "customer_name": [
@@ -157,6 +212,13 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "account_name",
         "billed_to",
         "payer_name",
+        "guest_name",
+        "passenger_name",
+        "patient_name",
+        "player_username",
+        "student_name",
+        "consignee_name",
+        "client_entity_name",
     ],
     "description": [
         "narration",
@@ -166,6 +228,7 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "transaction_details",
         "memo",
         "statement_narration",
+        "memo_text",
     ],
     "balance": [
         "running_balance",
@@ -173,5 +236,6 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "available_balance",
         "ledger_balance",
         "account_balance",
+        "available_funds",
     ],
 }

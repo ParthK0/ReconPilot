@@ -124,7 +124,7 @@ class ExceptionRecord(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     match_id = Column(String(36), ForeignKey("matches.id"), nullable=True)
     record_id = Column(String(36), ForeignKey("records.id"), nullable=False)
-    category = Column(String(100), nullable=False)  # settlement_delay, missing_credit, duplicate_invoice, refund_pending, unknown
+    category = Column(String(100), nullable=False)  # 30+ categories from exception_taxonomy
     notes = Column(Text, nullable=True)
     resolved = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
@@ -158,3 +158,25 @@ class MetricsSnapshot(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
     batch = relationship("Batch", back_populates="metrics_snapshots")
+
+
+class FeedbackMemoryRecord(Base):
+    __tablename__ = "feedback_memory"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    merchant_type = Column(String(50), nullable=False)
+    order_id = Column(String(100), nullable=True)
+    discrepancy_pattern = Column(String(100), nullable=False)
+    original_ai_reason = Column(String(100), nullable=True)
+    corrected_reason = Column(String(100), nullable=False)
+    amount_delta = Column(Numeric(14, 2), nullable=False)
+    evidence_field = Column(String(100), nullable=True)
+    reviewer_notes = Column(Text, nullable=True)
+    reviewer_action = Column(String(50), nullable=False, default="approved")
+    confidence_boost = Column(Numeric(5, 2), nullable=False, default=Decimal("5.00"))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        Index("idx_feedback_merchant_pattern", "merchant_type", "discrepancy_pattern"),
+        Index("idx_feedback_corrected_reason", "corrected_reason"),
+    )

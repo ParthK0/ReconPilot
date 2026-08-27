@@ -1,0 +1,9 @@
+{
+  "merchant_type": "travel",
+  "mdr": 1.75,
+  "gst": 18.0,
+  "tds": 1.0,
+  "platform_fee": 0.5,
+  "convenience_fee": 1.5,
+  "settlement_delay_days": 3
+}

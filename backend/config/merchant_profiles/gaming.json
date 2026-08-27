@@ -1,0 +1,9 @@
+{
+  "merchant_type": "gaming",
+  "mdr": 2.5,
+  "gst": 28.0,
+  "tds": 30.0,
+  "platform_fee": 1.0,
+  "convenience_fee": 0.0,
+  "settlement_delay_days": 1
+}

@@ -15,6 +15,8 @@ def clean_currency(val: Any, default: Decimal = Decimal("0.00")) -> Decimal:
       - '12000 INR'
       - '12000.00'
       - '-₹50.00' or '(50.00)' (negative amounts)
+      - '50.00-' (trailing minus)
+      - '$120.00', '120.00 USD'
     """
     if val is None or pd.isna(val):
         return default
@@ -28,17 +30,20 @@ def clean_currency(val: Any, default: Decimal = Decimal("0.00")) -> Decimal:
     if not val_str:
         return default
 
-    # Check for accounting style negative numbers in parentheses: (100.00) -> -100.00
+    # Check for accounting style negative numbers: (100.00) or 100.00- or -100.00
     is_negative = False
     if val_str.startswith("(") and val_str.endswith(")"):
         is_negative = True
         val_str = val_str[1:-1].strip()
+    elif val_str.endswith("-"):
+        is_negative = True
+        val_str = val_str[:-1].strip()
     elif val_str.startswith("-"):
         is_negative = True
         val_str = val_str[1:].strip()
 
-    # Remove currency symbols (₹, $, €, £), INR, commas, and extra whitespace
-    cleaned = re.sub(r"[₹\$€£]|INR|Rs\.?|rs\.?", "", val_str, flags=re.IGNORECASE)
+    # Remove currency symbols (₹, $, €, £), INR/USD tokens, commas, and extra whitespace
+    cleaned = re.sub(r"[₹\$€£]|INR|USD|EUR|GBP|Rs\.?|rs\.?", "", val_str, flags=re.IGNORECASE)
     cleaned = cleaned.replace(",", "").strip()
 
     try:
@@ -60,6 +65,7 @@ def clean_date(val: Any, default_year: int = 2026) -> date:
       - '21 Aug 2026', '21-Aug-2026', '21 Aug 26', '21-Aug-26'
       - 'Aug 21, 2026', 'August 21, 2026'
       - '21 Aug' (DD Mon -> assumed default_year)
+      - '2026.08.21' or '21.08.2026'
       - ISO datetime with 'T' e.g. '2026-08-21T14:30:00'
     """
     if isinstance(val, date) and not isinstance(val, datetime):
@@ -84,6 +90,8 @@ def clean_date(val: Any, default_year: int = 2026) -> date:
         "%d/%m/%Y",
         "%Y/%m/%d",
         "%m/%d/%Y",
+        "%d.%m.%Y",
+        "%Y.%m.%d",
         "%d/%m/%y",
         "%d-%m-%y",
         "%m-%d-%y",
@@ -124,6 +132,7 @@ def clean_reference(val: Any) -> Optional[str]:
     - 'ABC-123' -> 'ABC123'
     - 'abc 123' -> 'ABC123'
     - 'UTR 2026-08-0001' -> 'UTR2026080001'
+    - 'UTR/2026/08/12345' -> 'UTR20260812345'
     - '  ABC123  ' -> 'ABC123'
     """
     if val is None or pd.isna(val):
@@ -132,8 +141,8 @@ def clean_reference(val: Any) -> Optional[str]:
     if not val_str or val_str.lower() in ("nan", "none", "null"):
         return None
     
-    # Strip spaces and hyphens for canonical join matching, upper-cased
-    cleaned = re.sub(r"[\s\-_]", "", val_str).upper()
+    # Strip spaces, slashes, and hyphens for canonical join matching, upper-cased
+    cleaned = re.sub(r"[\s\-_\/\\\.]", "", val_str).upper()
     return cleaned if cleaned else None
 
 
@@ -147,7 +156,6 @@ def clean_order_id(val: Any) -> Optional[str]:
     val_str = str(val).strip()
     if not val_str or val_str.lower() in ("nan", "none", "null"):
         return None
-    # For order ids, preserve standard uppercase representation
     return val_str.upper()
 
 

@@ -46,3 +46,55 @@ INV-02,ORD-02,15000.00,2026-08-02,Bob,paid
     assert "order_id" in df.columns
     assert "invoice_date" in df.columns
     assert len(df) == 2
+
+
+def test_schema_mapper_ambiguity_handling():
+    # Test A: Both "order_number" and "order_no" are plausible candidates for canonical "order_id"
+    cols = ["order_number", "order_no", "invoice_id", "amount", "invoice_date", "customer_name", "status"]
+    mapping = map_schema(cols, "invoice")
+    assert mapping.is_valid is False
+    assert mapping.requires_user_confirmation is True
+    # Neither should be silently force-picked into rename_dict
+    assert "order_number" not in mapping.rename_dict
+    assert "order_no" not in mapping.rename_dict
+    assert "order_id" not in mapping.rename_dict.values()
+    # Both appear in suggested_mappings
+    assert "order_id" in mapping.suggested_mappings
+    assert "order_number" in mapping.suggested_mappings["order_id"]["candidates"]
+    assert "order_no" in mapping.suggested_mappings["order_id"]["candidates"]
+    # Both appear in column_mappings
+    mapped_orig_names = [m.original_name for m in mapping.column_mappings]
+    assert "order_number" in mapped_orig_names
+    assert "order_no" in mapped_orig_names
+
+
+def test_schema_mapper_sub_threshold_heuristic_not_auto_accepted():
+    # Test B: Only candidate for "amount" is a heuristic substring match (confidence 0.85)
+    cols = ["invoice_id", "order_id", "custom_payment_amt_col", "invoice_date", "customer_name", "status"]
+    mapping = map_schema(cols, "invoice")
+    assert mapping.is_valid is False
+    assert mapping.requires_user_confirmation is True
+    assert "custom_payment_amt_col" not in mapping.rename_dict
+    assert "amount" not in mapping.rename_dict.values()
+    assert "amount" in mapping.suggested_mappings
+    assert mapping.suggested_mappings["amount"]["source_column"] == "custom_payment_amt_col"
+    assert mapping.suggested_mappings["amount"]["confidence"] == 0.85
+    assert mapping.suggested_mappings["amount"]["method"] == "heuristic"
+
+
+def test_smart_csv_parser_genuine_failure_path():
+    # Test C: Headers that cannot match any rule, alias, AI, or heuristic
+    csv_data = """col_a,col_b,field_1,field_2
+val1,val2,val3,val4
+"""
+    parser = SmartCSVParser("invoice")
+    with pytest.raises(SchemaValidationError) as exc_info:
+        parser.parse(csv_data)
+    
+    err_msg = str(exc_info.value)
+    # Assert the exception message names the specific unmapped required fields
+    assert "invoice_id" in err_msg
+    assert "order_id" in err_msg
+    assert "amount" in err_msg
+    assert "invoice_date" in err_msg
+
