@@ -6,10 +6,10 @@ ReconPilot 2.0: Finance Verification Engine & AI Orchestrator.
 Orchestrates the AI verification lifecycle:
 1. Context assembly with pre-computed numeric delta and merchant fee schedule.
 2. Retrieval of similar historical human review corrections from Feedback Memory.
-3. LLM call (GPT-5.6 Terra / Gemini 3.1 Pro) with temperature 0.0, strict JSON schema, and retry fallback.
+3. LLM call (Gemini 2.5 Pro / GPT-5.6 Terra) with temperature 0.0, strict JSON schema, and retry fallback via LLMClient.
 4. Independent interception by Deterministic Arithmetic Validator (Python == check).
-5. Comprehensive evidence generation (Calculation Trace, Supporting Rules, Similar Cases).
-6. Immutable audit persistence to ai_verifications table.
+5. Comprehensive dynamic evidence generation (Calculation Trace, Dynamic Supporting Rules, Similar Cases).
+6. Immutable audit persistence to ai_verifications table with token usage & estimated cost.
 """
 
 import json
@@ -18,7 +18,6 @@ import time
 import uuid
 from decimal import Decimal
 from typing import Dict, Any, Optional, Tuple, List, Union
-import httpx
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -29,6 +28,12 @@ from backend.ai.validator import (
     validate_finance_verification,
 )
 from backend.ai.feedback_memory import feedback_store, HistoricalPrecedent
+from backend.ai.llm_client import (
+    LLMClient,
+    LLMResponse,
+    CostCeilingExceededError,
+    LLMConfigurationError,
+)
 from backend.db.models import AIVerification, Match
 from backend.normalizer.normalizer import NormalizedRecord
 
@@ -50,7 +55,7 @@ class AIVerificationResult(BaseModel):
     adjusted_confidence: Decimal
     evidence_field: str
     calculation_trace: str
-    model_used: str = "gpt-5.6-terra"
+    model_used: str = "gemini-2.5-pro"
     is_validated: bool = False
     requires_human_review: bool = False
     validation_outcome: str = "unconfirmable"
@@ -58,9 +63,11 @@ class AIVerificationResult(BaseModel):
     similar_past_cases: List[Dict[str, Any]] = Field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    estimated_cost_usd: Decimal = Field(default_factory=lambda: Decimal("0.000000"))
     latency_ms: int = 0
     raw_response: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
+    cost_ceiling_breached: bool = False
 
 
 def assemble_context_payload(
@@ -106,6 +113,7 @@ def assemble_context_payload(
                 "amount_delta": str(c.amount_delta),
                 "human_confirmed_reason": c.corrected_reason,
                 "reviewer_notes": c.reviewer_notes,
+                "similarity_score": c.similarity_score,
             }
             for c in similar_cases
         ]
@@ -119,64 +127,6 @@ def assemble_context_payload(
     ) + past_cases_text
 
     return SYSTEM_PROMPT, user_prompt, numeric_delta
-
-
-def _call_openai_compatible_api(
-    system_prompt: str,
-    user_prompt: str,
-    api_key: str,
-    model: str = "gpt-5.6-terra",
-    api_base: str = "https://api.openai.com/v1",
-) -> Tuple[str, int, int]:
-    """Calls OpenAI-compatible LLM endpoint."""
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "response_format": {"type": "json_object"},
-        "temperature": 0.0,
-    }
-    with httpx.Client(timeout=15.0) as client:
-        resp = client.post(f"{api_base.rstrip('/')}/chat/completions", headers=headers, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-        content = data["choices"][0]["message"]["content"]
-        prompt_tokens = data.get("usage", {}).get("prompt_tokens", 0)
-        completion_tokens = data.get("usage", {}).get("completion_tokens", 0)
-        return content, prompt_tokens, completion_tokens
-
-
-def _call_gemini_api(
-    system_prompt: str,
-    user_prompt: str,
-    api_key: str,
-    model: str = "gemini-2.5-pro",
-) -> Tuple[str, int, int]:
-    """Calls Google Gemini API with JSON output mode."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    payload = {
-        "system_instruction": {"parts": [{"text": system_prompt}]},
-        "contents": [{"parts": [{"text": user_prompt}]}],
-        "generationConfig": {
-            "response_mime_type": "application/json",
-            "temperature": 0.0,
-        },
-    }
-    with httpx.Client(timeout=15.0) as client:
-        resp = client.post(url, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-        candidate = data["candidates"][0]["content"]["parts"][0]["text"]
-        usage = data.get("usageMetadata", {})
-        prompt_tokens = usage.get("promptTokenCount", 0)
-        completion_tokens = usage.get("candidatesTokenCount", 0)
-        return candidate, prompt_tokens, completion_tokens
 
 
 def _simulate_llm_reasoning(
@@ -277,15 +227,80 @@ def _simulate_llm_reasoning(
     }
 
 
+def generate_dynamic_supporting_rules(
+    invoice: Optional[NormalizedRecord],
+    settlement: Optional[NormalizedRecord],
+    bank: Optional[NormalizedRecord],
+    numeric_delta: Decimal,
+    fee_schedule: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    """
+    Generates dynamic, mathematically grounded supporting rule descriptions
+    explaining precisely why deterministic rules missed and required AI verification.
+    """
+    rules: List[str] = []
+
+    # Rule 1: Exact Order ID
+    if invoice and settlement:
+        if invoice.order_id and settlement.order_id and invoice.order_id.strip() == settlement.order_id.strip():
+            if numeric_delta > Decimal("0.00"):
+                rules.append(
+                    f"Rule 1 (Exact Order ID): Miss on amount (Order '{invoice.order_id}' matched, but Invoice Rs {invoice.amount:,.2f} != Settlement Rs {settlement.amount:,.2f}; Delta Rs {numeric_delta:,.2f})"
+                )
+            else:
+                rules.append(f"Rule 1 (Exact Order ID): Evaluated (Order '{invoice.order_id}')")
+        else:
+            rules.append("Rule 1 (Exact Order ID): Miss (Order ID mismatch or unlinked)")
+    else:
+        rules.append("Rule 1 (Exact Order ID): Miss (Unpaired record)")
+
+    # Rule 2: Exact Reference / UTR
+    if settlement and bank:
+        if settlement.reference_number and bank.reference_number and settlement.reference_number.strip() == bank.reference_number.strip():
+            rules.append(f"Rule 2 (Exact UTR): Evaluated (UTR '{settlement.reference_number}' confirmed in bank credit)")
+        else:
+            rules.append("Rule 2 (Exact UTR): Miss (UTR mismatch or pending bank credit)")
+    else:
+        rules.append("Rule 2 (Exact UTR): Miss (No paired bank statement entry)")
+
+    # Rule 3: Exact Amount
+    if invoice and settlement:
+        if numeric_delta > Decimal("0.00"):
+            rules.append(f"Rule 3 (Exact Amount): Miss (Unadjusted amount variance of Rs {numeric_delta:,.2f})")
+        else:
+            rules.append("Rule 3 (Exact Amount): Evaluated (Amounts agree directly)")
+
+    # Rule 4: Settlement Window
+    if invoice and settlement:
+        days_diff = (settlement.txn_date - invoice.txn_date).days
+        max_days = (fee_schedule or {}).get("settlement_window_days", 2)
+        if 0 <= days_diff <= max_days:
+            rules.append(f"Rule 4 (Date Window): Evaluated (Settlement at T+{days_diff} days within T+{max_days} limit)")
+        else:
+            rules.append(f"Rule 4 (Date Window): Miss (Settlement delayed by {days_diff} days beyond T+{max_days})")
+
+    # Rule 5: Standard Fee Schedule
+    if invoice and settlement:
+        total_ded = settlement.fees + settlement.gst + settlement.tds
+        if total_ded > Decimal("0.00"):
+            rules.append(
+                f"Rule 5 (Rate Card Schedule): Miss (Recorded charges of Rs {total_ded:,.2f} differ from standard statutory rate schedule; custom one-off override detected)"
+            )
+        else:
+            rules.append("Rule 5 (Rate Card Schedule): Miss (Zero deductions recorded on settlement)")
+
+    return rules
+
+
 class FinanceVerificationOrchestrator:
     """
     FR-7 through FR-10 / 06-AI-Design.md Section 3:
     Orchestrates the Finance Verification Engine lifecycle:
     1. Context payload assembly with pre-computed delta and Feedback Memory retrieval
-    2. LLM call with strict JSON output
+    2. LLM call with strict JSON output via robust LLMClient
     3. Failure handling: 1 retry on malformed JSON, graceful fallback to needs_review
     4. Deterministic Validator re-derivation
-    5. Database logging to ai_verifications
+    5. Database logging to ai_verifications with token and cost tracking
     """
 
     def __init__(
@@ -293,10 +308,16 @@ class FinanceVerificationOrchestrator:
         model_name: Optional[str] = None,
         openai_api_key: Optional[str] = None,
         gemini_api_key: Optional[str] = None,
+        ai_mode: Optional[str] = None,
+        spend_ceiling_usd: Optional[Decimal] = None,
     ):
-        self.model_name = model_name or os.environ.get("AI_MODEL", "gpt-5.6-terra")
-        self.openai_api_key = openai_api_key or os.environ.get("OPENAI_API_KEY")
-        self.gemini_api_key = gemini_api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        self.llm_client = LLMClient(
+            openai_api_key=openai_api_key,
+            gemini_api_key=gemini_api_key,
+            model_name=model_name,
+            ai_mode=ai_mode,
+            spend_ceiling_usd=spend_ceiling_usd,
+        )
 
     def _execute_llm_call_with_retry(
         self,
@@ -306,45 +327,22 @@ class FinanceVerificationOrchestrator:
         settlement: Optional[NormalizedRecord],
         bank: Optional[NormalizedRecord],
         numeric_delta: Decimal,
-    ) -> Tuple[Dict[str, Any], int, int, str]:
+    ) -> Tuple[Dict[str, Any], int, int, str, Decimal]:
         """
-        Executes LLM call with Section 8 failure handling:
-        1 retry on malformed JSON, fallback on timeout / provider error.
+        Executes LLM call with failure handling and fallback.
         """
-        # If API key is available, call live provider
-        if self.gemini_api_key:
-            active_model = self.model_name if "gemini" in self.model_name.lower() else "gemini-2.5-pro"
-            for attempt in range(2):
-                try:
-                    curr_prompt = user_prompt if attempt == 0 else f"{user_prompt}\n\nIMPORTANT: Your previous response was invalid JSON. Respond ONLY with valid JSON conforming to the exact schema."
-                    raw_text, p_tok, c_tok = _call_gemini_api(system_prompt, curr_prompt, self.gemini_api_key, model=active_model)
-                    parsed = json.loads(raw_text)
-                    return parsed, p_tok, c_tok, active_model
-                except json.JSONDecodeError:
-                    if attempt == 1:
-                        break
-                except Exception:
-                    break
-
-        elif self.openai_api_key:
-            active_model = self.model_name if "gpt" in self.model_name.lower() else "gpt-5.6-terra"
-            for attempt in range(2):
-                try:
-                    curr_prompt = user_prompt if attempt == 0 else f"{user_prompt}\n\nIMPORTANT: Your previous response was invalid JSON. Respond ONLY with valid JSON conforming to the exact schema."
-                    raw_text, p_tok, c_tok = _call_openai_compatible_api(system_prompt, curr_prompt, self.openai_api_key, model=active_model)
-                    parsed = json.loads(raw_text)
-                    return parsed, p_tok, c_tok, active_model
-                except json.JSONDecodeError:
-                    if attempt == 1:
-                        break
-                except Exception:
-                    break
-
-        # Fallback / Simulated reasoning engine
-        parsed = _simulate_llm_reasoning(invoice, settlement, bank, numeric_delta)
-        p_tok = len(system_prompt.split()) + len(user_prompt.split())
-        c_tok = len(json.dumps(parsed).split())
-        return parsed, p_tok, c_tok, self.model_name
+        llm_res: LLMResponse = self.llm_client.generate_json_completion(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            fallback_simulation_fn=lambda: _simulate_llm_reasoning(invoice, settlement, bank, numeric_delta),
+        )
+        return (
+            llm_res.parsed_json,
+            llm_res.prompt_tokens,
+            llm_res.completion_tokens,
+            llm_res.model_name,
+            llm_res.estimated_cost_usd,
+        )
 
     def verify_discrepancy(
         self,
@@ -385,12 +383,31 @@ class FinanceVerificationOrchestrator:
             similar_cases=similar_cases,
         )
 
-        # Step 3: Call LLM with retry / fallback
-        raw_response, p_tokens, c_tokens, model_used = self._execute_llm_call_with_retry(
-            sys_prompt, user_prompt, invoice, settlement, bank, numeric_delta
-        )
-
-        latency_ms = int((time.time() - start_time) * 1000)
+        # Step 3: Check budget & Execute LLM Call
+        cost_breached = False
+        try:
+            llm_out = self._execute_llm_call_with_retry(
+                sys_prompt, user_prompt, invoice, settlement, bank, numeric_delta
+            )
+            raw_response = llm_out[0]
+            p_tokens = llm_out[1]
+            c_tokens = llm_out[2]
+            model_used = llm_out[3]
+            est_cost = llm_out[4] if len(llm_out) > 4 else Decimal("0.000000")
+            latency_ms = int((time.time() - start_time) * 1000)
+        except CostCeilingExceededError as cce:
+            cost_breached = True
+            raw_response = {
+                "difference_amount": float(numeric_delta),
+                "likely_reason": "insufficient_evidence",
+                "reasoning_explanation": f"AI budget ceiling exceeded: {str(cce)}",
+                "expected_value": 0.0,
+                "confidence_score": 30.0,
+                "evidence_field": "spend_ceiling",
+            }
+            p_tokens, c_tokens, latency_ms = 0, 0, int((time.time() - start_time) * 1000)
+            model_used = "budget-ceiling-exceeded"
+            est_cost = Decimal("0.000000")
 
         # Step 4: Validate model response through Deterministic Validator
         if invoice and settlement:
@@ -432,11 +449,14 @@ class FinanceVerificationOrchestrator:
                 evidence_field="amount",
             )
 
-        supporting_rules = [
-            "Rule 1 (Exact Order ID): Miss (amount discrepancy)",
-            "Rule 2 (Exact Reference): Evaluated",
-            "Rule 5 (Statutory Rate Card): Miss (non-standard override)",
-        ]
+        # Step 5: Generate dynamic, mathematically grounded supporting rules
+        supporting_rules = generate_dynamic_supporting_rules(
+            invoice=invoice,
+            settlement=settlement,
+            bank=bank,
+            numeric_delta=numeric_delta,
+            fee_schedule=fee_schedule,
+        )
 
         past_cases_data = [
             {
@@ -449,7 +469,7 @@ class FinanceVerificationOrchestrator:
             for c in similar_cases
         ]
 
-        # Build result
+        # Build final verified result
         result = AIVerificationResult(
             difference_amount=model_claim.difference_amount,
             likely_reason=model_claim.likely_reason,
@@ -461,18 +481,20 @@ class FinanceVerificationOrchestrator:
             calculation_trace=val_res.calculation_trace,
             model_used=model_used,
             is_validated=val_res.is_valid,
-            requires_human_review=val_res.requires_human_review,
+            requires_human_review=val_res.requires_human_review or cost_breached,
             validation_outcome=val_res.outcome,
             supporting_rules=supporting_rules,
             similar_past_cases=past_cases_data,
             prompt_tokens=p_tokens,
             completion_tokens=c_tokens,
+            estimated_cost_usd=est_cost,
             latency_ms=latency_ms,
             raw_response=raw_response,
             notes=val_res.notes,
+            cost_ceiling_breached=cost_breached,
         )
 
-        # Step 7: Log to database if session and match_id provided
+        # Step 6: Log to database if session and match_id provided
         if db and match_id:
             ai_rec = AIVerification(
                 id=str(uuid.uuid4()),

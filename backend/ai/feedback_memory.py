@@ -81,48 +81,80 @@ class FeedbackMemoryStore:
         merchant_type: str,
         amount_delta: Decimal,
         candidate_reason: Optional[str] = None,
+        discrepancy_pattern: Optional[str] = None,
         limit: int = 3,
     ) -> List[HistoricalPrecedent]:
         """
-        Retrieves past human reviewer decisions for similar delta/merchant patterns.
+        Retrieves past human reviewer decisions using multi-factor weighted similarity:
+        - Merchant archetype relevance (weight: 0.35 - 0.45)
+        - Numeric delta proximity & relative magnitude (weight: 0.40 - 0.55)
+        - Reason / pattern category alignment (weight: 0.25 when specified)
         """
         m_type = merchant_type.strip().lower()
         query = db.query(FeedbackMemoryRecord).filter(
             (FeedbackMemoryRecord.merchant_type == m_type) | (FeedbackMemoryRecord.merchant_type == "global")
         )
         
-        records = query.order_by(FeedbackMemoryRecord.created_at.desc()).limit(50).all()
+        records = query.order_by(FeedbackMemoryRecord.created_at.desc()).limit(100).all()
         results: List[HistoricalPrecedent] = []
 
         for rec in records:
-            # Compute heuristic similarity score
+            # 1. Merchant Archetype Match
+            if rec.merchant_type == m_type:
+                merchant_score = 1.0
+            elif rec.merchant_type == "global":
+                merchant_score = 0.70
+            else:
+                merchant_score = 0.20
+
+            # 2. Numeric Delta Proximity
             delta_diff = abs(rec.amount_delta - amount_delta)
             if delta_diff == Decimal("0.00"):
-                score = 1.0
-            elif delta_diff <= Decimal("5.00"):
-                score = 0.90
-            elif delta_diff <= Decimal("50.00"):
-                score = 0.75
+                delta_score = 1.0
+            elif amount_delta > Decimal("0.00"):
+                # Ratio-based relative proximity
+                rel_diff = float(delta_diff / max(amount_delta, rec.amount_delta))
+                delta_score = max(0.0, 1.0 - min(1.0, rel_diff * 1.5))
             else:
-                score = 0.50
+                delta_score = 1.0 if delta_diff <= Decimal("1.00") else max(0.0, 1.0 - float(delta_diff) / 100.0)
 
-            if candidate_reason and rec.corrected_reason == candidate_reason:
-                score = min(1.0, score + 0.1)
+            # 3. Discrepancy Pattern / Reason Alignment
+            if candidate_reason or discrepancy_pattern:
+                if candidate_reason and rec.corrected_reason == candidate_reason:
+                    pattern_score = 1.0
+                elif discrepancy_pattern and rec.discrepancy_pattern == discrepancy_pattern:
+                    pattern_score = 0.90
+                elif candidate_reason and rec.original_ai_reason == candidate_reason:
+                    pattern_score = 0.75
+                else:
+                    pattern_score = 0.50
 
-            results.append(
-                HistoricalPrecedent(
-                    precedent_id=rec.id,
-                    merchant_type=rec.merchant_type,
-                    corrected_reason=rec.corrected_reason,
-                    amount_delta=rec.amount_delta,
-                    reviewer_notes=rec.reviewer_notes or "Verified by finance controller.",
-                    reviewer_action=rec.reviewer_action,
-                    created_at=rec.created_at.strftime("%Y-%m-%d %H:%M UTC") if rec.created_at else "Earlier Batch",
-                    similarity_score=score,
+                composite_score = round(
+                    (merchant_score * 0.35) + (delta_score * 0.40) + (pattern_score * 0.25),
+                    4
                 )
-            )
+            else:
+                composite_score = round(
+                    (merchant_score * 0.45) + (delta_score * 0.55),
+                    4
+                )
 
-        # Sort by similarity and return top matches
+            # Only include precedents with meaningful similarity
+            if composite_score >= 0.40:
+                results.append(
+                    HistoricalPrecedent(
+                        precedent_id=rec.id,
+                        merchant_type=rec.merchant_type,
+                        corrected_reason=rec.corrected_reason,
+                        amount_delta=rec.amount_delta,
+                        reviewer_notes=rec.reviewer_notes or "Verified by finance controller.",
+                        reviewer_action=rec.reviewer_action,
+                        created_at=rec.created_at.strftime("%Y-%m-%d %H:%M UTC") if rec.created_at else "Earlier Batch",
+                        similarity_score=composite_score,
+                    )
+                )
+
+        # Sort descending by composite similarity score
         results.sort(key=lambda x: x.similarity_score, reverse=True)
         return results[:limit]
 
