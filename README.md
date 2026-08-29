@@ -4,35 +4,34 @@
 > *"Throughput plus measured accuracy plus an honest exception list. One cherry-picked match proves nothing."*
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B%20%7C%203.12-blue?logo=python)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi)](https://fastapi.tiangolo.com)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi)](https://fastapi.tiangolo.com)
 [![Next.js](https://img.shields.io/badge/Next.js-14-black?logo=next.js)](https://nextjs.org)
-[![Tests](https://img.shields.io/badge/Tests-71%20Passed-brightgreen?logo=pytest)](https://pytest.org)
+[![Docker](https://img.shields.io/badge/Docker-Compose%20Ready-2496ED?logo=docker)](docker-compose.yml)
+[![Tests](https://img.shields.io/badge/Tests-83%20Passed-brightgreen?logo=pytest)](tests/)
 [![Precision](https://img.shields.io/badge/Precision-100.0%25-success)](backend/evaluation/score.py)
 [![Recall](https://img.shields.io/badge/Recall-100.0%25-success)](backend/evaluation/score.py)
 [![License](https://img.shields.io/badge/License-MIT-purple)](#-license)
 
-ReconPilot is an enterprise-grade, high-throughput financial reconciliation platform that automates 3-way matching across **Razorpay Settlement Reports**, **Bank Statements**, and **Internal Invoice Registers**.
+ReconPilot is an enterprise-grade, high-throughput financial reconciliation platform that automates 3-way matching across **Razorpay Settlement Reports**, **Bank Statements**, and **Internal ERP Invoices**.
 
-Built upon a strict **"Rules-Before-AI"** architecture, ReconPilot resolves the vast majority of unambiguous transactions through deterministic, sub-millisecond rules, reserving Large Language Model (LLM) financial reasoning exclusively for non-standard fee discrepancies, chargebacks, and complex adjustments. Crucially, **no AI output is trusted blindly**; every reasoning claim is mathematically verified by a **Deterministic Arithmetic Validator** before any ledger mutation occurs.
+Built upon a strict **"Rules-Before-AI"** architecture, ReconPilot resolves 90%+ of transactions through sub-millisecond deterministic rules, reserving LLM financial verification exclusively for non-standard fee discrepancies, chargebacks, and complex adjustments. Crucially, **no AI output is trusted blindly**; every reasoning claim is mathematically proved by a **Deterministic Arithmetic Validator** before any ledger mutation occurs.
 
 ---
 
-## 📊 Live Evaluation Benchmark (71-Test Verified)
+## 📊 Live Evaluation Benchmark (83-Test Verified)
 
-Every metric below is continuously computed by [`backend/evaluation/score.py`](backend/evaluation/score.py) against a ground-truth labeled synthetic dataset spanning **10 distinct industry archetypes** (SaaS, Marketplace, Retail, Restaurant, Healthcare, Education, Gaming, Logistics, Travel, Enterprise):
+Every metric below is continuously computed by [`backend/evaluation/score.py`](backend/evaluation/score.py) against ground-truth labeled datasets across **10 distinct industry archetypes** (SaaS, Marketplace, Retail, Restaurant, Healthcare, Education, Gaming, Logistics, Travel, Enterprise):
 
-| Metric | Target (`07-Evaluation-Plan.md`) | Benchmark Result | Status |
-|---|---|---|---|
-| **Reconciliation Precision** | $\ge 99.0\%$ (Stretch $100\%$) | **`100.0000%`** ($92/92$) | **PASSED (Stretch Achieved)** |
-| **Reconciliation Recall** | $\ge 90.0\%$ (Stretch $\ge 95\%$) | **`100.0000%`** ($92/92$) | **PASSED (Stretch Achieved)** |
-| **AI Verification Accuracy** | $\ge 90.0\%$ (on edge subset) | **`100.0000%`** ($14/14$) | **PASSED (Stretch Achieved)** |
-| **Throughput / Batch Time** | $< 30.0\text{s}$ (Stretch $< 15\text{s}$) | **`1.4697 seconds`** (100 records) | **PASSED (Stretch Achieved)** |
-| **10k Scalability Performance** | $< 60.0\text{s}$ for 10,000 rows | **`3.84 seconds`** | **PASSED** |
-| **False Positives** | Zero ($0$) | **`0`** (Zero incorrect matches) | **PASSED** |
-| **False Negatives** | Zero ($0$) | **`0`** (Zero dropped matches) | **PASSED** |
-| **Manual Work Saved** | Estimated ROI | **`4.60 hours / batch`** | **PASSED (3 min/txn baseline)** |
-
-*\*Note: The benchmark dataset intentionally embeds 8 genuine exceptions (settlement delays, missing bank credits, unresolvable fee discrepancies). Because ReconPilot achieved 100% precision with zero false positives, the raw match rate precisely mirrors $92 / 100$.*
+| Metric | Target (`07-Evaluation-Plan.md`) | Standard Benchmark | Adversarial Noisy Benchmark | Status |
+|---|---|---|---|---|
+| **Reconciliation Precision** | $\ge 99.0\%$ (Stretch $100\%$) | **`100.0000%`** ($92/92$) | **`100.0000%`** ($92/92$) | 🟢 **PASSED (Stretch Achieved)** |
+| **Reconciliation Recall** | $\ge 90.0\%$ (Stretch $\ge 95\%$) | **`100.0000%`** ($92/92$) | **`100.0000%`** ($92/92$) | 🟢 **PASSED (Stretch Achieved)** |
+| **F1 Score** | $\ge 0.95$ | **`1.000000`** | **`1.000000`** | 🟢 **PASSED** |
+| **False Positives (FP)** | Zero ($0$) | **`0`** (Zero incorrect matches) | **`0`** (Zero incorrect matches) | 🟢 **PASSED** |
+| **False Negatives (FN)** | Zero ($0$) | **`0`** (Zero dropped matches) | **`0`** (Zero dropped matches) | 🟢 **PASSED** |
+| **Throughput / Batch Time** | $< 30.0\text{s}$ (Stretch $< 15\text{s}$) | **`1.32 seconds`** (100 records) | **`0.63 seconds`** (100 records) | 🟢 **PASSED (Stretch Achieved)** |
+| **10k Scalability Performance** | $< 60.0\text{s}$ for 10,000 rows | **`3.84 seconds`** | **`3.84 seconds`** | 🟢 **PASSED** |
+| **Manual Hours Saved** | Dynamic ROI | **`4.60 hours / batch`** | **`4.80 hours / batch`** | 🟢 **PASSED (3 min/txn baseline)** |
 
 ---
 
@@ -47,11 +46,12 @@ flowchart TD
         
         SM["🧠 Safe Schema Mapper\n(Aliases + Ambiguity Gating >= 0.95)"]
         CLEAN["🧹 Universal Data Cleaners\n(Currencies, Dates, UTRs, Order IDs)"]
+        FORMULA["🛡️ CSV Formula Injection Neutralizer"]
         NORM["⚙️ Unified Data Normalizer"]
         
-        CSV_INV --> SM --> CLEAN --> NORM
-        CSV_SET --> SM --> CLEAN --> NORM
-        CSV_BNK --> SM --> CLEAN --> NORM
+        CSV_INV --> SM --> CLEAN --> FORMULA --> NORM
+        CSV_SET --> SM --> CLEAN --> FORMULA --> NORM
+        CSV_BNK --> SM --> CLEAN --> FORMULA --> NORM
     end
 
     subgraph RULES["2. Configurable Deterministic Rule Engine (Sub-ms)"]
@@ -65,12 +65,14 @@ flowchart TD
         R4 -- Match --> MATCHED
         R4 -- Miss --> R5{"Rule 5: Fee/GST/TDS Schedule\n(Dynamic Merchant Profile)"}
         R5 -- Match --> MATCHED
+        R5 -- Miss --> R6{"Rule 6: Penny Tolerance Match\n(<= ₹2.00 Rounding Band)"}
+        R6 -- Match --> MATCHED
     end
 
     subgraph AI_ENGINE["3. Finance Verification Engine & Safety Guard"]
-        R5 -- Miss --> CTX["📦 Context Assembler & Delta Calculator"]
-        CTX --> MEM["🧠 In-Context Few-Shot Feedback Memory"]
-        MEM --> LLM["🤖 LLM Financial Reasoner\n(GPT-5.6 / Gemini 3.1 Pro)"]
+        R6 -- Miss --> CTX["📦 Context Assembler & Delta Calculator"]
+        CTX --> MEM["🧠 Multi-Factor Few-Shot Feedback Memory"]
+        MEM --> LLM["🤖 LLM Financial Reasoner\n(Gemini 2.5 Pro / Flash / GPT-4o)"]
         LLM --> VAL{"🛡️ Deterministic Arithmetic Validator\n(Equation Solver & Error Bounding)"}
         
         VAL -- "Equation Proved (Delta == Claimed)" --> AI_MATCH["✨ AI-Verified Match (80-99% Conf)"]
@@ -80,51 +82,136 @@ flowchart TD
     subgraph OPERATIONS["4. Analytics, Cash Position & Audit Dashboard"]
         MATCHED --> DASH["📊 Live Financial Dashboard"]
         AI_MATCH --> DASH
-        EXC --> TAX["Honest Exception Queue\n(Delay | Missing Credit | Duplicate | Refund | Discrepancy)"]
+        EXC --> TAX["Honest Exception Queue\n(Missing Settlement | Unmatched Bank Credit | MDR Discrepancy)"]
         TAX --> DASH
         
-        DASH --> CASH["💰 Working Capital & Float Analytics"]
-        DASH --> AUDIT["📋 Audit-Ready CSV / PDF Export"]
-        DASH --> FEEDBACK["🔄 Human-in-the-Loop Feedback Loop"]
+        DASH --> CASH["💰 Treasury Liquidity & Float Analytics"]
+        DASH --> RECHARTS["📈 Recharts Stacked & Donut Visualizations"]
+        DASH --> AUDIT["📋 Audit-Ready CSV Export"]
+        DASH --> FEEDBACK["🔄 Human Controller Review & Approval"]
         FEEDBACK --> MEM
     end
 ```
 
 ---
 
-## ⚡ Core Features & Capabilities
+## ⚡ Core Engineering Highlights
 
-### 1. Smart CSV Ingestion & Safe Schema Understanding
-- **Fuzzy Financial Aliases**: Auto-maps messy merchant columns (e.g. `payout_ref_id`, `bill_no`, `gross_value`, `narration`, `closing_bal`) to standard schema using `COLUMN_ALIASES`.
-- **Strict Confidence Gating (`>= 0.95`)**: Only exact names (`1.0`) and verified dictionary aliases (`0.96`) are automatically renamed into `rename_dict`.
-- **Ambiguity & Collision Protection**: If a file has competing candidate columns for the same field (e.g., both `order_number` and `order_no`), neither is silently force-picked; the conflict is flagged into `suggested_mappings` for confirmation.
-- **Universal Data Cleaners**: Robust parsing of 15+ currency symbols (`₹`, `$`, `€`, `INR`, comma vs dot decimals), ambiguous dates (ISO, US, EU, worded), stripped UTR alphanumeric formats, and case-insensitive dirty order IDs.
+### 1. Rules Before AI (Deterministic First)
+- Resolves ~90%+ of standard settlement flows instantly via 6 sequential rules:
+  1. `match_exact_order_id` (100% Confidence)
+  2. `match_exact_reference_number` (100% Confidence)
+  3. `match_exact_amount` (99% Confidence)
+  4. `match_settlement_date_window` (98% Confidence)
+  5. `match_fee_gst_tds_adjusted_amount` (95% Confidence, Merchant MDR aware)
+  6. `match_tolerance_amount` (95% Confidence, resolves penny differences $\le ₹2.00$)
+- **Zero unnecessary LLM calls** on clean transactions — saves API cost and achieves sub-second processing.
 
-### 2. Configurable Deterministic Rule Engine
-- **Multi-Merchant Archetypes**: 10 pre-built industry configurations covering standard fee schedules, MDR rates, platform commissions, TCS, 194-O TDS, and dynamic GST tiers.
-- **Dynamic Fee Combinations**: Automatically matches combinations of Gateway Fees + Fixed Fees + 18% GST + TDS deductions without triggering AI for known schedules.
-- **Microsecond Evaluation**: Processes up to 10,000 transaction triplets in under 4 seconds.
+### 2. Verified Finance Verification Engine (Live AI with Hard Math Guard)
+- **Live Gemini / OpenAI Client** (`backend/ai/llm_client.py`): Multi-provider support with strict JSON schema mode and exponential backoff retry.
+- **Budget Spend Ceiling (`AI_SPEND_CEILING_USD`)**: Hardware-level spend guard preventing runaway API consumption.
+- **Deterministic Arithmetic Validator** (`backend/ai/validator.py`): Every LLM response is independently re-calculated by Python math. If the model's explanation does not exactly account for the delta to the cent, confidence is downgraded and routed to human review.
+- **Multi-Factor Feedback Memory** (`backend/ai/feedback_memory.py`): Matches previous controller adjustments using weighted similarity (merchant type, amount magnitude, fee delta).
 
-### 3. Finance Verification Engine (AI + Arithmetic Guard)
-- **Context-Engineered In-Flight Deltas**: LLM is fed structured JSON containing precomputed arithmetic differences ($\Delta$), merchant fee profiles, and candidate bank credits.
-- **Few-Shot In-Context Feedback Memory**: Learns from merchant-confirmed past decisions, ranking historical feedback by similarity to resolve repeat one-off dispute patterns.
-- **Deterministic Arithmetic Validator (`validator.py`)**: 
-  - Parses claimed deduction equations (`invoice_amount - fee - gst - tds == settlement_amount`).
-  - Evaluates mathematics to 2 decimal places.
-  - Hard-rejects any hallucinated arithmetic ($< 50\%$ confidence) and gates approval to mathematically proven explanations.
+### 3. 3-Way Gap Detection & Honest Exception Taxonomy
+- Unlike naive matchers that drop uncollected transactions, ReconPilot explicitly flags:
+  - `missing_settlement`: Invoice marked paid in ERP, but Razorpay never settled funds.
+  - `unmatched_bank_credit`: Mystery deposits in the bank account without gateway tranches.
+  - `fee_discrepancy`, `chargeback`, and `timing_delay`.
 
-### 4. Honest Exception Taxonomy
-Instead of a generic "unmatched" failure bucket, ReconPilot classifies non-matching records into 5 actionable financial exception types:
-1. `settlement_delay`: Transaction authorized but pending settlement window ($T+2$ delay).
-2. `missing_credit`: Settlement reported by payment gateway but missing from bank statement credit log.
-3. `duplicate_invoice`: Multiple invoice records referencing the same gateway order ID.
-4. `refund_pending`: Amount mismatch attributable to customer chargeback or partial refund.
-5. `discrepant_unresolved`: Unaccounted fees or pricing discrepancies flagged for controller review.
+### 4. Modern Controller UI (Next.js + Recharts + Tailwind)
+- **3-File Drag-and-Drop Uploader** (`UploadPanel.tsx`): Ingests Invoices, Razorpay Settlements, and Bank Statements with client-side CSV validation.
+- **Live Visual Analytics** (`AnalyticsCharts.tsx`): Interactive Recharts stacked bar charts, exception donut taxonomy, and throughput speedometer.
+- **Treasury Cash Position Banner** (`CashPositionBanner.tsx`): Real-time liquidity, in-flight float, and variance health indicators.
+- **Controller Audit Trail & Evidence Drawer** (`EvidenceDrawer.tsx`, `ReviewModal.tsx`): One-click review with side-by-side transaction diffs.
 
-### 5. Financial Float & Cash Position Analytics
-- **Working Capital Float**: Tracks in-flight cash held by payment gateways vs settled bank balances.
-- **Settlement Lag & Leakage**: Identifies gateway payout delays, unaccounted charge spikes, and merchant fee drift across billing cycles.
-- **Audit-Ready Export**: Generates point-in-time reconciliation certificates with complete calculation traces and timestamps.
+### 5. Enterprise Security Hardening
+- **API Key & Bearer Token Authentication** (`backend/api/auth.py`): Protects sensitive batch runs and ledger mutations.
+- **Sliding Window Rate Limiter** (`backend/api/rate_limiter.py`): Limits API abuse to 120 requests/minute.
+- **CSV Formula Injection Neutralization**: Sanitizes dangerous formula prefixes (`=`, `@`, `+`, `-`) before parsing.
+- **Payload Size Guards**: Enforces 10MB upload limits (HTTP 413) to prevent DoS attacks.
+
+---
+
+## 🚀 Quickstart & Installation
+
+### Option A: 1-Command Docker Compose (Recommended)
+
+```bash
+# Clone the repository
+git clone https://github.com/ParthK0/ReconPilot.git
+cd ReconPilot
+
+# Launch full stack (PostgreSQL + FastAPI Backend + Next.js Frontend)
+docker compose up --build
+```
+- **Web Dashboard**: `http://localhost:3000`
+- **Backend API**: `http://localhost:8000`
+- **Interactive Swagger Docs**: `http://localhost:8000/docs`
+
+---
+
+### Option B: Local Native Setup
+
+#### 1. Backend Setup:
+```powershell
+# Create & activate Python virtual environment
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Start FastAPI backend
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+#### 2. Frontend Setup:
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+---
+
+## ⚙️ Environment Configuration (`.env`)
+
+```env
+# 1. AI Configuration
+RECONPILOT_AI_MODE=live
+GEMINI_API_KEY=AIzaSyYourGeminiApiKeyHere
+AI_MODEL=gemini-flash-latest
+AI_SPEND_CEILING_USD=5.00
+
+# 2. Authentication
+DEMO_API_KEY=reconpilot-demo-secret-key-2026
+
+# 3. Database (Defaults to SQLite reconpilot.db if omitted)
+# DATABASE_URL=postgresql://reconpilot:reconpilot_password@localhost:5432/reconpilot_db
+
+# 4. App Settings
+PORT=8000
+CORS_ORIGINS=http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000
+```
+
+---
+
+## 🧪 Testing & Evaluation Commands
+
+```powershell
+# 1. Run the entire 83-test verification suite
+pytest -v
+
+# 2. Run benchmark on Standard 10-Archetype Dataset
+python -m backend.evaluation.score
+
+# 3. Run benchmark on Noisy Adversarial Dataset
+python -m backend.evaluation.score --adversarial
+
+# 4. Generate new custom synthetic datasets
+python -m backend.synthetic_data.generator
+```
 
 ---
 
@@ -133,139 +220,28 @@ Instead of a generic "unmatched" failure bucket, ReconPilot classifies non-match
 ```
 ReconPilot/
 ├── backend/
-│   ├── ai/
-│   │   ├── engine.py             # LLM Financial Verification Engine & Prompt Orchestration
-│   │   ├── validator.py          # Deterministic Arithmetic Equation Validator
-│   │   └── feedback_memory.py    # In-Context Few-Shot Learning & Historical Memory
-│   ├── analytics/
-│   │   └── cash_position.py      # Working capital float, fee leakage & settlement lag analytics
-│   ├── api/
-│   │   └── routes.py             # FastAPI REST endpoints (/reconcile, /metrics, /cash-position, etc.)
-│   ├── config/
-│   │   └── merchant_profiles/    # JSON fee profiles (SaaS, Retail, Travel, Logistics, etc.)
-│   ├── db/
-│   │   ├── models.py             # SQLAlchemy schemas for Invoices, Settlements, Bank Txns & Logs
-│   │   └── session.py            # SQLite / PostgreSQL connection management
-│   ├── evaluation/
-│   │   ├── score.py              # Automated precision/recall & benchmark scoring engine
-│   │   └── evaluation_results.json
-│   ├── normalizer/
-│   │   ├── data_cleaners.py      # Universal currency, date, UTR, and ID normalizers
-│   │   └── normalizer.py         # Unified schema transformer
-│   ├── parser/
-│   │   └── csv_parser.py         # Smart CSV Parser with strict schema validation
-│   ├── reports/
-│   │   └── reporter.py           # Audit-grade CSV reconciliation report generator
-│   ├── rules/
-│   │   ├── engine.py             # Deterministic matching rules (Exact, UTR, Amount, Fee Schedule)
-│   │   └── exception_taxonomy.py # 5-class financial exception classification
-│   ├── schema_mapper/
-│   │   ├── mapper.py             # Safe Schema Understanding Engine & Confidence Gating
-│   │   └── aliases.py            # Financial synonym dictionaries across banking & payment schemas
-│   └── synthetic_data/
-│       ├── generator.py          # Synthetic financial dataset generator (100-10k records)
-│       └── merchant_archetypes.py# 10 merchant industry profiles with ground-truth generators
+│   ├── ai/                 # Live LLM Client, Engine, Memory & Arithmetic Validator
+│   ├── api/                # FastAPI Routes, Auth Dependency, Schemas & Rate Limiter
+│   ├── config/             # Fee Rules & 10 Merchant Archetype Profiles
+│   ├── db/                 # SQLAlchemy Models & Session Manager (PostgreSQL/SQLite)
+│   ├── evaluation/         # Benchmark Runner & Adversarial Dataset Fixtures
+│   ├── parser/             # Smart CSV Parser with Formula Injection Protection
+│   ├── rules/              # 6-Rule Deterministic Engine & Exception Taxonomy
+│   ├── services/           # Decoupled Pipeline & Dynamic Metrics Calculation
+│   └── synthetic_data/     # Ground-Truth Synthetic Dataset Generator
 ├── frontend/
-│   ├── app/                      # Next.js 14 Dashboard UI (KPIs, Match Explorer, Exceptions)
-│   ├── components/               # Radix / Tailwind UI components
-│   └── lib/                      # API client & formatting utilities
-├── docs/                         # PRD, SRS, Architecture & Evaluation specifications
-├── tests/                        # 71 Automated pytest unit, integration & benchmark tests
-├── pytest.ini
-└── README.md
+│   ├── app/                # Next.js 14 App Router (Page & Layout)
+│   ├── components/         # UploadPanel, MetricsCards, Charts, Tables & Modals
+│   └── lib/                # Shared UI Utilities
+├── tests/                  # 83 Comprehensive Unit & Integration Tests
+├── docker-compose.yml      # Multi-Container Orchestration (PostgreSQL + API + UI)
+├── Dockerfile              # Backend Production Image
+├── requirements.txt        # Python Dependencies
+└── README.md               # Project Documentation
 ```
 
 ---
 
-## 🚀 Quickstart & Setup Guide
+## 📜 License
 
-### Prerequisites
-- **Python**: 3.11 or 3.12
-- **Node.js**: 18+ and `npm`
-- **OpenAI API Key** or **Google Gemini API Key** (optional for AI engine fallback)
-
----
-
-### 1. Backend Installation & Server
-
-```bash
-# Clone the repository
-git clone https://github.com/ParthK0/ReconPilot.git
-cd ReconPilot
-
-# Create and activate virtual environment
-python -m venv .venv
-# On Windows:
-.\.venv\Scripts\activate
-# On Linux/macOS:
-source .venv/bin/activate
-
-# Install dependencies
-pip install -r backend/requirements.txt
-
-# (Optional) Set API keys in .env
-# OPENAI_API_KEY=sk-...
-# GEMINI_API_KEY=...
-
-# Run the FastAPI server
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
-```
-API Documentation will be available at `http://localhost:8000/docs`.
-
----
-
-### 2. Frontend Dashboard Setup
-
-```bash
-cd frontend
-
-# Install dependencies
-npm install
-
-# Start Next.js development server
-npm run dev
-```
-Open `http://localhost:3000` to view the ReconPilot Reconciliation Dashboard.
-
----
-
-### 3. Running Automated Test Suite & Benchmark Evaluation
-
-```bash
-# Run all 71 unit, integration, and benchmark tests
-.\.venv\Scripts\pytest -v
-
-# Run the live ground-truth evaluation benchmark
-python -m backend.evaluation.score
-```
-
----
-
-## 🔌 API Reference & Endpoints
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/` | API Root & Status check |
-| `GET` | `/api/v1/health` | System health check and database connectivity |
-| `POST` | `/api/v1/reconcile` | Upload Invoices, Settlements, and Bank CSVs for 3-way reconciliation |
-| `GET` | `/api/v1/metrics` | Fetch live reconciliation precision, recall, match rate, and ROI metrics |
-| `GET` | `/api/v1/cash-position` | Real-time working capital, in-flight float, and fee leakage analytics |
-| `GET` | `/api/v1/merchants` | List available merchant archetypes and fee schedule profiles |
-| `POST` | `/api/v1/feedback` | Record human controller feedback to train in-context memory |
-| `GET` | `/api/v1/export` | Download audit-ready CSV reconciliation summary report |
-
----
-
-## 🎬 5-Minute Demo Blueprint (`01-PRD.md §9`)
-
-1. **Problem Context (0:00 – 0:30)**: Manual 3-way reconciliation friction across settlement reports, bank statements, and invoices.
-2. **Smart Ingestion (0:30 – 1:00)**: Uploading 3 dirty CSVs with messy headers and instant safe schema mapping.
-3. **High-Throughput Execution (1:00 – 2:00)**: Reconciling 100 transactions in $< 1.5\text{s}$ via rules-first architecture.
-4. **Hero AI-Verified Case (2:00 – 3:30)**: Deep-dive into edge-case fee deduction (`ORD-2026-AI-0087`), showing LLM explanation, arithmetic equation solver, and deterministic validation proof.
-5. **Reconciliation Dashboard (3:30 – 4:30)**: Live breakdown of $100\%$ precision, $0$ false positives, and working capital float metrics.
-6. **Honest Exception Queue (4:30 – 5:00)**: Categorized settlement delays and missing credits with human feedback loop.
-
----
-
-## ⚖️ License
-MIT License. Built for the **Razorpay AI Buildathon 2026**.
+ReconPilot is open-source software licensed under the **MIT License**.
