@@ -1,0 +1,15 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+*.db
+*.sqlite
+*.sqlite3
+frontend/.next
+frontend/node_modules
+.env
+.env.local

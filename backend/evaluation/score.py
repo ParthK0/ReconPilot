@@ -36,13 +36,13 @@ from pydantic import BaseModel, Field
 from backend.db.session import SessionLocal, init_db
 from backend.parser import InvoiceParser, SettlementParser, BankStatementParser
 from backend.normalizer import normalize_dataframe, persist_normalized_records
-from backend.api.routes import process_reconciliation_batch
+from backend.services.pipeline import process_reconciliation_batch
 from backend.db.models import Batch, Record, Match, AIVerification, ExceptionRecord, MetricsSnapshot
 
 
 class RecordEvaluationDetail(BaseModel):
     scenario_id: str
-    order_id: str
+    order_id: Optional[str] = None
     settlement_id: Optional[str] = None
     invoice_id: Optional[str] = None
     bank_txn_id: Optional[str] = None
@@ -518,6 +518,11 @@ def main():
         help="Baseline manual reconciliation minutes per record (default: 3.0)",
     )
     parser.add_argument(
+        "--adversarial",
+        action="store_true",
+        help="Run evaluation against the noisy adversarial dataset (backend/evaluation/adversarial_dataset)",
+    )
+    parser.add_argument(
         "--quiet",
         action="store_true",
         help="Suppress printed summary output to console",
@@ -525,8 +530,10 @@ def main():
 
     args = parser.parse_args()
 
+    data_dir = "backend/evaluation/adversarial_dataset" if args.adversarial else args.data_dir
+
     result = run_evaluation(
-        data_dir=args.data_dir,
+        data_dir=data_dir,
         output_json_path=args.output_json,
         manual_min_per_record=args.manual_minutes,
     )

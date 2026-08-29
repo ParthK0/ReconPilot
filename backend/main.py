@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 
 from backend.db.session import init_db, DATABASE_URL
 from backend.api.routes import router as api_router
+from backend.api.rate_limiter import RateLimiterMiddleware
 
 load_dotenv()
 
@@ -23,6 +24,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# Rate Limiter Middleware (120 req/min)
+app.add_middleware(RateLimiterMiddleware, max_requests=120, window_seconds=60)
 
 # CORS configuration
 origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001")

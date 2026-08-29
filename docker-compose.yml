@@ -1,0 +1,58 @@
+version: "3.8"
+
+services:
+  # 1. PostgreSQL Database
+  db:
+    image: postgres:16-alpine
+    container_name: reconpilot_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: reconpilot
+      POSTGRES_PASSWORD: reconpilot_password
+      POSTGRES_DB: reconpilot_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reconpilot -d reconpilot_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. FastAPI Backend Service
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: reconpilot_backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://reconpilot:reconpilot_password@db:5432/reconpilot_db
+      RECONPILOT_AI_MODE: offline
+      AI_SPEND_CEILING_USD: "5.00"
+      CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000"
+      PORT: 8000
+    ports:
+      - "8000:8000"
+
+  # 3. Next.js Frontend Dashboard
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: reconpilot_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+      PORT: 3000
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data:

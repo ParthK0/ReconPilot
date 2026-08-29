@@ -148,12 +148,24 @@ class BaseCSVParser(ABC):
                 source_type=self.source_type,
             )
 
+    def _sanitize_formulas(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Sanitizes string cells against CSV / Spreadsheet formula injection.
+        Prepends a quote when formula characters are detected alongside alphabetic identifiers.
+        """
+        for col in df.select_dtypes(include=["object"]).columns:
+            df[col] = df[col].apply(
+                lambda val: f"'{val}" if isinstance(val, str) and val.startswith(("=", "@", "+", "-")) and any(c.isalpha() for c in val[:10]) else val
+            )
+        return df
+
     def parse(self, source: Union[str, bytes, Path, TextIO, BinaryIO]) -> pd.DataFrame:
         """
-        Parses and validates CSV source, returning a validated DataFrame.
+        Parses and validates CSV source, returning a validated, sanitized DataFrame.
         """
         df = self._read_to_dataframe(source)
         self.validate_schema(df)
+        df = self._sanitize_formulas(df)
         return df
 
 

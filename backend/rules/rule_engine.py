@@ -314,6 +314,44 @@ def match_fee_gst_tds_adjusted_amount(
 
 
 # ---------------------------------------------------------------------------
+# 6. Rule 6: Tolerance Amount Match (Penny Rounding Band <= Rs 2.00)
+# ---------------------------------------------------------------------------
+
+def match_tolerance_amount(
+    invoice: Optional[NormalizedRecord] = None,
+    settlement: Optional[NormalizedRecord] = None,
+    bank: Optional[NormalizedRecord] = None,
+    max_delta: Decimal = Decimal("2.00"),
+) -> RuleMatchResult:
+    """
+    Rule 6: Matches records where Order ID matches and net difference is within
+    a small configurable penny tolerance band (|delta| <= Rs 2.00).
+    Assigns 95% confidence.
+    """
+    if invoice and settlement:
+        if (
+            invoice.order_id
+            and settlement.order_id
+            and invoice.order_id.strip() == settlement.order_id.strip()
+            and invoice.amount > Decimal("0.00")
+            and settlement.status == "settled"
+            and invoice.status == "paid"
+        ):
+            delta = abs(invoice.amount - settlement.amount)
+            if Decimal("0.00") < delta <= max_delta:
+                return RuleMatchResult(
+                    is_matched=True,
+                    rule_name="tolerance_amount_match",
+                    confidence=Decimal("95.00"),
+                    invoice_record=invoice,
+                    settlement_record=settlement,
+                    bank_record=bank,
+                    notes=f"Matched within penny tolerance band (variance of Rs {delta:,.2f} <= Rs {max_delta:,.2f}).",
+                )
+    return RuleMatchResult(is_matched=False)
+
+
+# ---------------------------------------------------------------------------
 # Ordered Rule Engine Pipeline (FR-4)
 # ---------------------------------------------------------------------------
 
@@ -323,6 +361,7 @@ RULE_FUNCTIONS = [
     ("exact_amount", match_exact_amount),
     ("settlement_date_window", match_settlement_date_window),
     ("fee_gst_tds_adjusted_amount", match_fee_gst_tds_adjusted_amount),
+    ("tolerance_amount_match", match_tolerance_amount),
 ]
 
 
@@ -341,8 +380,9 @@ def apply_rules_in_order(
     3. Exact amount (no adjustment)
     4. Settlement-date window (T+2 days or config delay window)
     5. Fee / GST / TDS adjusted amount (configurable deterministic rate formulas)
+    6. Tolerance amount match (|delta| <= Rs 2.00 penny band)
     
-    Returns the first matching RuleMatchResult (100% confidence) or an unmatched result.
+    Returns the first matching RuleMatchResult or an unmatched result.
     """
     cfg = load_fee_config(fee_config) if fee_config is not None else DEFAULT_FEE_CONFIG
     window_days = max_date_window_days if max_date_window_days is not None else cfg.settlement_delay_days
@@ -389,5 +429,10 @@ def apply_rules_in_order(
     res5 = match_fee_gst_tds_adjusted_amount(invoice=invoice, settlement=settlement, bank=bank, fee_config=cfg)
     if res5.is_matched:
         return res5
+
+    # 6. Tolerance Amount Match
+    res6 = match_tolerance_amount(invoice=invoice, settlement=settlement, bank=bank)
+    if res6.is_matched:
+        return res6
 
     return RuleMatchResult(is_matched=False)
