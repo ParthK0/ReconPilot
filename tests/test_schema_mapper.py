@@ -48,6 +48,7 @@ INV-02,ORD-02,15000.00,2026-08-02,Bob,paid
     assert len(df) == 2
 
 
+
 def test_schema_mapper_ambiguity_handling():
     # Test A: Both "order_number" and "order_no" are plausible candidates for canonical "order_id"
     cols = ["order_number", "order_no", "invoice_id", "amount", "invoice_date", "customer_name", "status"]

@@ -272,8 +272,24 @@ EXCEPTION_DEFINITIONS: Dict[str, ExceptionDefinition] = {
         suggested_action="Request UTR batch report from gateway merchant operations.",
         financial_impact="timing",
     ),
+    "unmatched_bank_credit": ExceptionDefinition(
+        category_id="unmatched_bank_credit",
+        domain="Payout Discrepancies",
+        display_title="Unmatched Bank Credit Entry",
+        description="Bank statement records an inflow credit that has no corresponding payment gateway settlement.",
+        suggested_action="Verify direct bank transfer, interest credit, or non-gateway deposit source.",
+        financial_impact="excess",
+    ),
 
     # 7. Invoices & Refunds
+    "missing_settlement": ExceptionDefinition(
+        category_id="missing_settlement",
+        domain="Invoices & Refunds",
+        display_title="Uncollected / Missing Gateway Settlement",
+        description="Invoice is recorded as paid in ERP ledger, but payment gateway generated no settlement payout.",
+        suggested_action="Check gateway payment status or initiate capture reconciliation for order.",
+        financial_impact="shortfall",
+    ),
     "duplicate_invoice": ExceptionDefinition(
         category_id="duplicate_invoice",
         domain="Invoices & Refunds",

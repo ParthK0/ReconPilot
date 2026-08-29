@@ -90,6 +90,9 @@ class Match(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
     batch = relationship("Batch", back_populates="matches")
+    settlement_record = relationship("Record", foreign_keys=[settlement_record_id])
+    bank_record = relationship("Record", foreign_keys=[bank_record_id])
+    invoice_record = relationship("Record", foreign_keys=[invoice_record_id])
     ai_verification = relationship("AIVerification", back_populates="match", uselist=False, cascade="all, delete-orphan")
     exceptions = relationship("ExceptionRecord", back_populates="match", cascade="all, delete-orphan")
 

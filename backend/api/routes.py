@@ -19,355 +19,73 @@ import os
 import time
 import uuid
 from decimal import Decimal
-from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List, Union
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Response, status
-from fastapi.responses import PlainTextResponse
-from sqlalchemy.orm import Session
-from sqlalchemy import text
-from pydantic import BaseModel
+from sqlalchemy.orm import Session, joinedload
 
-from backend.db.session import get_db, DATABASE_URL
+from backend.db.session import get_db
 from backend.db.models import Batch, Record, Match, AIVerification, ExceptionRecord, MetricsSnapshot
-from backend.config.fee_rules import FeeConfig, load_fee_config
+from backend.config.fee_rules import load_fee_config
 from backend.parser import (
-    InvoiceParser,
-    SettlementParser,
-    BankStatementParser,
     SmartCSVParser,
     SchemaValidationError,
-    InvalidCSVFormatError,
-    EmptyFileError,
 )
 from backend.normalizer import (
     normalize_dataframe,
     persist_normalized_records,
-    NormalizedRecord,
 )
-from backend.rules import (
-    apply_rules_in_order,
-    find_duplicate_order_ids,
-    RuleMatchResult,
-)
-from backend.rules.exception_taxonomy import get_exception_definition, list_exception_categories
-from backend.ai.engine import verify_discrepancy
-from backend.ai.feedback_memory import feedback_store
+from backend.schema_mapper import map_schema
+from backend.synthetic_data.merchant_archetypes import MERCHANT_ARCHETYPES
+from backend.synthetic_data.generator import generate_merchant_dataset
 from backend.analytics.cash_position import compute_cash_position, CashPositionSnapshot
-from backend.evaluation.evaluator import calculate_metrics
+from backend.rules.exception_taxonomy import list_exception_categories, get_exception_definition
 from backend.reports.reporter import generate_reconciliation_csv
-from backend.synthetic_data.generator import generate_merchant_dataset, generate_synthetic_data
-from backend.synthetic_data.merchant_archetypes import MERCHANT_ARCHETYPES, get_archetype
-from backend.schema_mapper.mapper import map_schema, remap_dataframe
+from backend.ai.feedback_memory import feedback_store
+from backend.services.pipeline import process_reconciliation_batch
+from backend.api.schemas import (
+    ReviewMatchRequest,
+    ReviewMatchResponse,
+    BatchStatusResponse,
+    GeneratedBatchResponse,
+    BatchUploadResponse,
+    PaginatedMatchesResponse,
+    MatchSummaryItem,
+    MerchantMetadataResponse,
+)
 
-router = APIRouter(tags=["ReconPilot API"])
+from backend.api.auth import verify_api_key
+
+from sqlalchemy import text
+
+MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB per file limit
+
+router = APIRouter()
 
 
-class HealthResponse(BaseModel):
-    status: str
-    service: str = "ReconPilot Backend"
-    version: str
-    database_connected: bool
-    database_type: str
-    timestamp: float
+# ---------------------------------------------------------------------------
+# Health Check Endpoint
+# ---------------------------------------------------------------------------
 
-
-@router.get("/health", response_model=HealthResponse)
-@router.get("/api/v1/health", response_model=HealthResponse)
-def health_check(db: Session = Depends(get_db)):
-    """Health check endpoint confirming API status and database connectivity."""
-    db_connected = False
-    db_type = "postgresql" if "postgresql" in DATABASE_URL or "postgres" in DATABASE_URL else "sqlite"
+@router.get("/api/v1/health")
+def api_v1_health(db: Session = Depends(get_db)):
+    """Health check verifying database connection and service responsiveness."""
     try:
         db.execute(text("SELECT 1"))
         db_connected = True
     except Exception:
         db_connected = False
-
-    return HealthResponse(
-        status="healthy",
-        service="ReconPilot Backend",
-        version="1.0.0",
-        database_connected=db_connected,
-        database_type=db_type,
-        timestamp=time.time(),
-    )
-
-
-# ---------------------------------------------------------------------------
-# Pipeline Execution Engine
-# ---------------------------------------------------------------------------
-
-def process_reconciliation_batch(
-    db: Session,
-    batch_id: str,
-    fee_config: Optional[Union[FeeConfig, str, dict]] = None,
-    ground_truth: Optional[Union[List[Dict[str, Any]], Dict[str, Any], str]] = None,
-    merchant_type: str = "retail",
-) -> MetricsSnapshot:
-    """
-    Executes the end-to-end reconciliation pipeline:
-    1. Deterministic Rule Matching (80-90%)
-    2. Finance Verification Engine (AI) with Feedback Memory retrieval for rule misses
-    3. 30+ Exception Classification for unresolved records
-    4. Metrics Computation & Snapshot Persistence (Honest Metrics)
-    """
-    start_time = time.time()
-    batch = db.query(Batch).filter(Batch.id == batch_id).first()
-    if not batch:
-        raise HTTPException(status_code=404, detail="Batch not found")
-
-    batch.status = "processing"
-    db.commit()
-
-    # Ground truth mapping: keyed by order_id
-    gt_by_order: Optional[Dict[str, Any]] = None
-    if ground_truth is not None:
-        if isinstance(ground_truth, list):
-            gt_by_order = {item["order_id"]: item for item in ground_truth if isinstance(item, dict) and "order_id" in item}
-        elif isinstance(ground_truth, dict):
-            if all(isinstance(v, dict) for v in ground_truth.values()):
-                gt_by_order = ground_truth
-            elif "order_id" in ground_truth:
-                gt_by_order = {ground_truth["order_id"]: ground_truth}
-        elif isinstance(ground_truth, str) and os.path.isfile(ground_truth):
-            with open(ground_truth, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    gt_by_order = {item["order_id"]: item for item in data if isinstance(item, dict) and "order_id" in item}
-
-    # Load normalized records for this batch
-    records = db.query(Record).filter(Record.batch_id == batch_id).all()
-    invoices_db = [r for r in records if r.source_type == "invoice"]
-    settlements_db = [r for r in records if r.source_type == "settlement"]
-    banks_db = [r for r in records if r.source_type == "bank"]
-
-    def to_norm(r: Record) -> NormalizedRecord:
-        return NormalizedRecord(
-            id=r.id,
-            batch_id=r.batch_id,
-            source_type=r.source_type,
-            transaction_id=r.transaction_id,
-            order_id=r.order_id,
-            amount=r.amount,
-            txn_date=r.txn_date,
-            reference_number=r.reference_number,
-            status=r.status,
-            fees=r.fees,
-            gst=r.gst,
-            tds=r.tds,
-            raw_payload=r.raw_payload or {},
-        )
-
-    norm_invoices = [to_norm(r) for r in invoices_db]
-    norm_settlements = [to_norm(r) for r in settlements_db]
-    norm_banks = [to_norm(r) for r in banks_db]
-
-    inv_by_order = {r.order_id: r for r in norm_invoices if r.order_id}
-    bank_by_utr = {r.reference_number: r for r in norm_banks if r.reference_number}
-
-    duplicates = find_duplicate_order_ids(norm_invoices)
-
-    rule_matches_count = 0
-    ai_verified_count = 0
-    exceptions_count = 0
-
-    has_gt = gt_by_order is not None
-    tp = 0 if has_gt else None
-    fp = 0 if has_gt else None
-    fn = 0 if has_gt else None
-    ai_correct = 0 if has_gt else None
-    ai_total = 0 if has_gt else None
-
-    # Clean existing matches for idempotency
-    db.query(Match).filter(Match.batch_id == batch_id).delete()
-    db.commit()
-
-    for settle in norm_settlements:
-        inv = inv_by_order.get(settle.order_id)
-        bank = bank_by_utr.get(settle.reference_number)
-        gt_item = gt_by_order.get(settle.order_id) if has_gt else None
-        expected_res = gt_item.get("expected_resolution") if gt_item else None
-
-        # Step 1: Run Deterministic Rules
-        if len(norm_banks) > 0 and bank is None:
-            rule_res = RuleMatchResult(is_matched=False, notes="Bank credit missing in bank statement.")
-        else:
-            rule_res: RuleMatchResult = apply_rules_in_order(
-                invoice=inv,
-                settlement=settle,
-                bank=bank,
-                duplicate_order_ids=duplicates,
-                fee_config=fee_config,
-            )
-
-        match_id = str(uuid.uuid4())
-
-        if rule_res.is_matched:
-            # Deterministic Rule Match
-            match_row = Match(
-                id=match_id,
-                batch_id=batch_id,
-                settlement_record_id=settle.id,
-                invoice_record_id=inv.id if inv else None,
-                bank_record_id=bank.id if bank else None,
-                match_method="rule",
-                rule_name=rule_res.rule_name,
-                confidence=rule_res.confidence,
-                status="matched",
-            )
-            db.add(match_row)
-            rule_matches_count += 1
-            if has_gt:
-                if expected_res in ("rule", "exact", "fee_deduction", "gst_deduction", "tds_deduction"):
-                    tp += 1
-                else:
-                    fp += 1
-        else:
-            # Step 2: Pass miss to Finance Verification Engine (AI)
-            ai_res = verify_discrepancy(
-                invoice=inv,
-                settlement=settle,
-                bank=bank,
-                db=db,
-                match_id=match_id,
-                merchant_type=merchant_type,
-            )
-
-            if ai_res.is_validated and ai_res.adjusted_confidence >= Decimal("80.00"):
-                # AI-Verified Match
-                match_row = Match(
-                    id=match_id,
-                    batch_id=batch_id,
-                    settlement_record_id=settle.id,
-                    invoice_record_id=inv.id if inv else None,
-                    bank_record_id=bank.id if bank else None,
-                    match_method="ai",
-                    rule_name=None,
-                    confidence=ai_res.adjusted_confidence,
-                    status="matched",
-                )
-                db.add(match_row)
-                ai_verified_count += 1
-                if has_gt:
-                    ai_total += 1
-                    if expected_res == "ai":
-                        tp += 1
-                        ai_correct += 1
-                    else:
-                        fp += 1
-            else:
-                # Step 3: 30+ Exception Classification
-                match_row = Match(
-                    id=match_id,
-                    batch_id=batch_id,
-                    settlement_record_id=settle.id,
-                    invoice_record_id=inv.id if inv else None,
-                    bank_record_id=bank.id if bank else None,
-                    match_method="ai",
-                    rule_name=None,
-                    confidence=ai_res.adjusted_confidence,
-                    status="exception",
-                )
-                db.add(match_row)
-                exceptions_count += 1
-                if has_gt:
-                    if expected_res == "ai":
-                        ai_total += 1
-                        fn += 1
-                    elif expected_res in ("rule", "exact", "fee_deduction", "gst_deduction", "tds_deduction"):
-                        fn += 1
-
-                # Classify into 30+ Granular Exception Categories
-                if settle.status == "pending" or (inv and inv.status == "pending_settlement"):
-                    cat = "settlement_delay"
-                    notes = "Settlement delay beyond standard settlement window."
-                elif (inv and inv.status == "refunded") or (bank and bank.amount < Decimal("0.00")):
-                    cat = "refund_pending"
-                    notes = "Negative bank transaction / refund deduction."
-                elif inv and inv.order_id in duplicates:
-                    cat = "duplicate_invoice"
-                    notes = f"Duplicate invoice detected with shared order ID '{inv.order_id}'."
-                elif (len(norm_banks) > 0 and bank is None) or (inv and inv.amount == settle.amount and bank and bank.amount != settle.amount):
-                    cat = "missing_credit"
-                    notes = "Settlement payout not credited in bank statement."
-                elif "chargeback" in (ai_res.likely_reason or ""):
-                    cat = "chargeback"
-                    notes = "Cardholder chargeback dispute debit."
-                elif "escrow" in (ai_res.likely_reason or ""):
-                    cat = "escrow_hold"
-                    notes = "Marketplace escrow hold pending fulfillment."
-                elif "fraud" in (ai_res.likely_reason or ""):
-                    cat = "fraud_hold"
-                    notes = "Automated risk engine fraud hold."
-                elif "tds" in (ai_res.likely_reason or ""):
-                    cat = "tds_revision"
-                    notes = "TDS rate variation or Section 194 threshold adjustment."
-                elif "holiday" in (ai_res.likely_reason or ""):
-                    cat = "settlement_holiday"
-                    notes = "Banking holiday settlement rollover."
-                else:
-                    cat = "unknown_discrepancy"
-                    notes = ai_res.notes or "Discrepancy cannot be resolved by rules or verified by AI."
-
-                exc_row = ExceptionRecord(
-                    id=str(uuid.uuid4()),
-                    match_id=match_id,
-                    record_id=settle.id,
-                    category=cat,
-                    notes=notes,
-                    resolved=False,
-                )
-                db.add(exc_row)
-
-    db.commit()
-
-    processing_time = round(time.time() - start_time, 2)
-    total_processed = len(norm_settlements)
-
-    metrics = calculate_metrics(
-        total_records=total_processed,
-        true_positives=tp,
-        false_positives=fp,
-        false_negatives=fn,
-        rule_matches=rule_matches_count,
-        ai_verified=ai_verified_count,
-        exceptions=exceptions_count,
-        ai_correct=ai_correct,
-        ai_total=ai_total,
-        processing_time_seconds=processing_time,
-    )
-
-    snapshot = MetricsSnapshot(
-        id=str(uuid.uuid4()),
-        batch_id=batch_id,
-        records_processed=metrics.total_records,
-        rule_matches=metrics.rule_matches_count,
-        ai_verified=metrics.ai_verified_count,
-        needs_review=metrics.exceptions_count,
-        match_rate=Decimal(str(metrics.match_rate)),
-        precision=Decimal(str(metrics.precision)) if metrics.precision is not None else None,
-        recall=Decimal(str(metrics.recall)) if metrics.recall is not None else None,
-        true_positives=metrics.true_positives,
-        false_positives=metrics.false_positives,
-        false_negatives=metrics.false_negatives,
-        ai_accuracy=Decimal(str(metrics.ai_verification_accuracy)) if metrics.ai_verification_accuracy is not None else None,
-        processing_time_seconds=Decimal(str(metrics.processing_time_seconds)),
-        manual_hours_saved=Decimal(str(metrics.manual_hours_saved)),
-    )
-    db.add(snapshot)
-    batch.status = "done"
-    db.commit()
-    db.refresh(snapshot)
-    return snapshot
-
-
-# ---------------------------------------------------------------------------
+    return {
+        "status": "healthy",
+        "version": "1.0.0",
+        "service": "ReconPilot Backend",
+        "database_connected": db_connected,
+    }
 # API Endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("/merchants", response_model=List[Dict[str, Any]])
-@router.get("/api/v1/merchants", response_model=List[Dict[str, Any]])
+@router.get("/api/v1/merchants", response_model=List[MerchantMetadataResponse])
+@router.get("/merchants", response_model=List[MerchantMetadataResponse], include_in_schema=False)
 def list_merchants():
     """Returns metadata for all 10 registered industry merchant archetypes."""
     results = []
@@ -385,8 +103,8 @@ def list_merchants():
     return results
 
 
-@router.post("/schema/preview")
 @router.post("/api/v1/schema/preview")
+@router.post("/schema/preview", include_in_schema=False)
 async def preview_schema(
     file: UploadFile = File(...),
     source_type: str = Query("settlement"),
@@ -408,8 +126,8 @@ async def preview_schema(
     return mapping.model_dump()
 
 
-@router.post("/batches", status_code=status.HTTP_201_CREATED)
-@router.post("/api/v1/batches", status_code=status.HTTP_201_CREATED)
+@router.post("/api/v1/batches", status_code=status.HTTP_201_CREATED, response_model=BatchUploadResponse)
+@router.post("/batches", status_code=status.HTTP_201_CREATED, response_model=BatchUploadResponse, include_in_schema=False)
 async def upload_batch(
     settlement_csv: UploadFile = File(...),
     bank_csv: UploadFile = File(...),
@@ -417,6 +135,7 @@ async def upload_batch(
     ground_truth_json: Optional[UploadFile] = File(None),
     merchant_type: Optional[str] = Query("retail"),
     db: Session = Depends(get_db),
+    _auth: bool = Depends(verify_api_key),
 ):
     """
     POST /batches: Upload 3 CSV files, validate schemas, persist records,
@@ -425,6 +144,17 @@ async def upload_batch(
     settle_bytes = await settlement_csv.read()
     bank_bytes = await bank_csv.read()
     inv_bytes = await invoice_csv.read()
+
+    # Enforce maximum 10 MB file size limit per upload
+    if (
+        len(settle_bytes) > MAX_FILE_SIZE_BYTES
+        or len(bank_bytes) > MAX_FILE_SIZE_BYTES
+        or len(inv_bytes) > MAX_FILE_SIZE_BYTES
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Uploaded file size exceeds maximum limit of 10 MB per file.",
+        )
 
     m_type = merchant_type or "retail"
 
@@ -489,12 +219,13 @@ async def upload_batch(
     }
 
 
-@router.post("/batches/generate", status_code=status.HTTP_201_CREATED)
-@router.post("/api/v1/batches/generate", status_code=status.HTTP_201_CREATED)
+@router.post("/api/v1/batches/generate", status_code=status.HTTP_201_CREATED, response_model=GeneratedBatchResponse)
+@router.post("/batches/generate", status_code=status.HTTP_201_CREATED, response_model=GeneratedBatchResponse, include_in_schema=False)
 def trigger_generated_batch(
     merchant_type: str = Query("restaurant"),
     record_count: int = Query(100, ge=10, le=10000),
     db: Session = Depends(get_db),
+    _auth: bool = Depends(verify_api_key),
 ):
     """
     On-Demand Scalable Batch Generation across 10 Industry Verticals (100 to 10,000 records)
@@ -549,18 +280,17 @@ def trigger_generated_batch(
     }
 
 
-@router.post("/batches/demo", status_code=status.HTTP_201_CREATED)
-@router.post("/api/v1/batches/demo", status_code=status.HTTP_201_CREATED)
+@router.post("/api/v1/batches/demo", status_code=status.HTTP_201_CREATED, response_model=GeneratedBatchResponse)
+@router.post("/batches/demo", status_code=status.HTTP_201_CREATED, response_model=GeneratedBatchResponse, include_in_schema=False)
 def trigger_demo_batch(db: Session = Depends(get_db)):
     """Triggers automated reconciliation against the 100-row Retail synthetic dataset."""
     return trigger_generated_batch(merchant_type="retail", record_count=100, db=db)
 
 
-@router.get("/batches/{batch_id}/cash-position", response_model=CashPositionSnapshot)
 @router.get("/api/v1/batches/{batch_id}/cash-position", response_model=CashPositionSnapshot)
+@router.get("/batches/{batch_id}/cash-position", response_model=CashPositionSnapshot, include_in_schema=False)
 def get_cash_position(batch_id: str, db: Session = Depends(get_db)):
     """
-    GET /batches/{batch_id}/cash-position:
     Returns Current Bank Balance, Pending Settlements, Pending Refunds, Expected Cash Tomorrow,
     and Liquidity Health Index.
     """
@@ -570,8 +300,8 @@ def get_cash_position(batch_id: str, db: Session = Depends(get_db)):
     return compute_cash_position(db, batch_id)
 
 
-@router.get("/batches/{batch_id}")
-@router.get("/api/v1/batches/{batch_id}")
+@router.get("/api/v1/batches/{batch_id}", response_model=BatchStatusResponse)
+@router.get("/batches/{batch_id}", response_model=BatchStatusResponse, include_in_schema=False)
 def get_batch_status(batch_id: str, db: Session = Depends(get_db)):
     """GET /batches/{batch_id}: Retrieve batch status."""
     batch = db.query(Batch).filter(Batch.id == batch_id).first()
@@ -589,8 +319,8 @@ def get_batch_status(batch_id: str, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/batches/{batch_id}/matches")
-@router.get("/api/v1/batches/{batch_id}/matches")
+@router.get("/api/v1/batches/{batch_id}/matches", response_model=PaginatedMatchesResponse)
+@router.get("/batches/{batch_id}/matches", response_model=PaginatedMatchesResponse, include_in_schema=False)
 def get_batch_matches(
     batch_id: str,
     status_filter: Optional[str] = Query(None, alias="status"),
@@ -599,7 +329,10 @@ def get_batch_matches(
     page_size: int = Query(25, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    """GET /batches/{batch_id}/matches: Paginated list of reconciliation matches."""
+    """
+    GET /batches/{batch_id}/matches: Paginated list of reconciliation matches.
+    Optimized with single batch record map lookup to eliminate N+1 queries.
+    """
     query = db.query(Match).filter(Match.batch_id == batch_id)
     if status_filter:
         query = query.filter(Match.status == status_filter)
@@ -609,11 +342,15 @@ def get_batch_matches(
     total = query.count()
     matches = query.order_by(Match.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
 
+    # Pre-fetch all batch records in 1 query to prevent N+1 query loops
+    batch_records = db.query(Record).filter(Record.batch_id == batch_id).all()
+    record_map: Dict[str, Record] = {r.id: r for r in batch_records}
+
     result = []
     for m in matches:
-        settle_rec = db.query(Record).filter(Record.id == m.settlement_record_id).first() if m.settlement_record_id else None
-        inv_rec = db.query(Record).filter(Record.id == m.invoice_record_id).first() if m.invoice_record_id else None
-        bank_rec = db.query(Record).filter(Record.id == m.bank_record_id).first() if m.bank_record_id else None
+        settle_rec = record_map.get(m.settlement_record_id) if m.settlement_record_id else None
+        inv_rec = record_map.get(m.invoice_record_id) if m.invoice_record_id else None
+        bank_rec = record_map.get(m.bank_record_id) if m.bank_record_id else None
 
         result.append({
             "match_id": m.id,
@@ -625,7 +362,7 @@ def get_batch_matches(
             "invoice_record_id": m.invoice_record_id,
             "bank_record_id": m.bank_record_id,
             "order_id": (settle_rec.order_id if settle_rec else (inv_rec.order_id if inv_rec else None)),
-            "amount": float(settle_rec.amount if settle_rec else (inv_rec.amount if inv_rec else 0.0)),
+            "amount": float(settle_rec.amount if settle_rec else (inv_rec.amount if inv_rec else (bank_rec.amount if bank_rec else 0.0))),
             "settlement_amount": float(settle_rec.amount) if settle_rec else None,
             "invoice_amount": float(inv_rec.amount) if inv_rec else None,
             "bank_amount": float(bank_rec.amount) if bank_rec else None,
@@ -641,17 +378,24 @@ def get_batch_matches(
     }
 
 
-@router.get("/matches/{match_id}")
 @router.get("/api/v1/matches/{match_id}")
+@router.get("/matches/{match_id}", include_in_schema=False)
 def get_match_detail(match_id: str, db: Session = Depends(get_db)):
-    """GET /matches/{match_id}: Single match detail + full AI verification evidence & past cases."""
+    """GET /matches/{match_id}: Single match detail with AI verification evidence & past cases."""
     match = db.query(Match).filter(Match.id == match_id).first()
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
 
-    settle_rec = db.query(Record).filter(Record.id == match.settlement_record_id).first() if match.settlement_record_id else None
-    inv_rec = db.query(Record).filter(Record.id == match.invoice_record_id).first() if match.invoice_record_id else None
-    bank_rec = db.query(Record).filter(Record.id == match.bank_record_id).first() if match.bank_record_id else None
+    # Load records for this match in 1 batch query
+    record_ids = [r_id for r_id in (match.settlement_record_id, match.invoice_record_id, match.bank_record_id) if r_id]
+    rec_lookup: Dict[str, Record] = {}
+    if record_ids:
+        recs = db.query(Record).filter(Record.id.in_(record_ids)).all()
+        rec_lookup = {r.id: r for r in recs}
+
+    settle_rec = rec_lookup.get(match.settlement_record_id) if match.settlement_record_id else None
+    inv_rec = rec_lookup.get(match.invoice_record_id) if match.invoice_record_id else None
+    bank_rec = rec_lookup.get(match.bank_record_id) if match.bank_record_id else None
 
     ai_ver = db.query(AIVerification).filter(AIVerification.match_id == match_id).first()
     ai_data = None
@@ -741,18 +485,25 @@ def get_match_detail(match_id: str, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/batches/{batch_id}/exceptions")
 @router.get("/api/v1/batches/{batch_id}/exceptions")
+@router.get("/batches/{batch_id}/exceptions", include_in_schema=False)
 def get_batch_exceptions(batch_id: str, db: Session = Depends(get_db)):
-    """GET /batches/{batch_id}/exceptions: 30+ Exception classification report."""
+    """GET /batches/{batch_id}/exceptions: Exception classification report."""
     exceptions = db.query(ExceptionRecord).join(Record).filter(Record.batch_id == batch_id).all()
     
     categories: Dict[str, int] = {cat: 0 for cat in list_exception_categories()}
     items = []
     
+    # Pre-fetch all exception records in 1 query
+    rec_ids = [exc.record_id for exc in exceptions if exc.record_id]
+    rec_lookup: Dict[str, Record] = {}
+    if rec_ids:
+        recs = db.query(Record).filter(Record.id.in_(rec_ids)).all()
+        rec_lookup = {r.id: r for r in recs}
+
     for exc in exceptions:
         categories[exc.category] = categories.get(exc.category, 0) + 1
-        rec = db.query(Record).filter(Record.id == exc.record_id).first()
+        rec = rec_lookup.get(exc.record_id)
         exc_def = get_exception_definition(exc.category)
         
         items.append({
@@ -775,10 +526,10 @@ def get_batch_exceptions(batch_id: str, db: Session = Depends(get_db)):
     return {**categories, "total_exceptions": len(items), "items": items}
 
 
-@router.get("/batches/{batch_id}/metrics")
 @router.get("/api/v1/batches/{batch_id}/metrics")
+@router.get("/batches/{batch_id}/metrics", include_in_schema=False)
 def get_batch_metrics(batch_id: str, db: Session = Depends(get_db)):
-    """GET /batches/{batch_id}/metrics: Dashboard headline numbers (FR-16)."""
+    """GET /batches/{batch_id}/metrics: Dashboard headline numbers."""
     snapshot = (
         db.query(MetricsSnapshot)
         .filter(MetricsSnapshot.batch_id == batch_id)
@@ -818,12 +569,13 @@ def get_batch_metrics(batch_id: str, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/matches/{match_id}/review")
-@router.post("/api/v1/matches/{match_id}/review")
+@router.post("/api/v1/matches/{match_id}/review", response_model=ReviewMatchResponse)
+@router.post("/matches/{match_id}/review", response_model=ReviewMatchResponse, include_in_schema=False)
 def review_match(
     match_id: str,
-    payload: Dict[str, Any],
+    payload: ReviewMatchRequest,
     db: Session = Depends(get_db),
+    _auth: bool = Depends(verify_api_key),
 ):
     """
     POST /matches/{match_id}/review:
@@ -833,9 +585,9 @@ def review_match(
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
 
-    resolved = payload.get("resolved", True)
-    reviewer_note = payload.get("reviewer_note", "Reviewed and resolved manually.")
-    corrected_reason = payload.get("corrected_reason", "manual_fee_adjustment")
+    resolved = payload.resolved
+    reviewer_note = payload.reviewer_note
+    corrected_reason = payload.corrected_reason
 
     exc = db.query(ExceptionRecord).filter(ExceptionRecord.match_id == match_id).first()
     settle_rec = db.query(Record).filter(Record.id == match.settlement_record_id).first() if match.settlement_record_id else None
@@ -861,25 +613,34 @@ def review_match(
             reviewer_notes=reviewer_note,
             reviewer_action="approved" if resolved else "rejected",
         )
-    except Exception as e:
-        print(f"Warning: Failed to persist feedback memory: {e}")
+    except Exception:
+        pass
 
     db.commit()
     db.refresh(match)
     return {"match_id": match.id, "status": match.status, "confidence": float(match.confidence), "resolved": resolved}
 
 
-@router.get("/batches/{batch_id}/export")
 @router.get("/api/v1/batches/{batch_id}/export")
+@router.get("/batches/{batch_id}/export", include_in_schema=False)
 def export_batch_csv(batch_id: str, db: Session = Depends(get_db)):
     """GET /batches/{batch_id}/export: Exports final reconciliation CSV report."""
     matches = db.query(Match).filter(Match.batch_id == batch_id).all()
-    records_data = []
+    
+    # Pre-fetch all batch records in 1 query
+    batch_records = db.query(Record).filter(Record.batch_id == batch_id).all()
+    rec_lookup: Dict[str, Record] = {r.id: r for r in batch_records}
 
+    # Pre-fetch all AI verifications for this batch in 1 query
+    match_ids = [m.id for m in matches]
+    ai_verifications = db.query(AIVerification).filter(AIVerification.match_id.in_(match_ids)).all() if match_ids else []
+    ai_map: Dict[str, AIVerification] = {a.match_id: a for a in ai_verifications}
+
+    records_data = []
     for m in matches:
-        settle_rec = db.query(Record).filter(Record.id == m.settlement_record_id).first() if m.settlement_record_id else None
-        inv_rec = db.query(Record).filter(Record.id == m.invoice_record_id).first() if m.invoice_record_id else None
-        ai_ver = db.query(AIVerification).filter(AIVerification.match_id == m.id).first()
+        settle_rec = rec_lookup.get(m.settlement_record_id) if m.settlement_record_id else None
+        inv_rec = rec_lookup.get(m.invoice_record_id) if m.invoice_record_id else None
+        ai_ver = ai_map.get(m.id)
 
         evidence = m.rule_name if m.match_method == "rule" else (ai_ver.evidence_field if ai_ver else "none")
         records_data.append({
