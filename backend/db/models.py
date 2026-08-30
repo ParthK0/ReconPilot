@@ -37,6 +37,7 @@ class Batch(Base):
     __tablename__ = "batches"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id = Column(String(100), nullable=False, default="org_default", index=True)
     settlement_filename = Column(Text, nullable=True)
     bank_filename = Column(Text, nullable=True)
     invoice_filename = Column(Text, nullable=True)
@@ -52,11 +53,14 @@ class Record(Base):
     __tablename__ = "records"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id = Column(String(100), nullable=False, default="org_default", index=True)
     batch_id = Column(String(36), ForeignKey("batches.id"), nullable=False)
     source_type = Column(String(50), nullable=False)  # settlement, bank, invoice
     transaction_id = Column(String(100), nullable=False)
     order_id = Column(String(100), nullable=True)
     amount = Column(Numeric(14, 2), nullable=False)
+    currency = Column(String(10), nullable=False, default="INR")
+    fx_rate = Column(Numeric(10, 4), nullable=False, default=Decimal("1.0000"))
     txn_date = Column(Date, nullable=False)
     reference_number = Column(String(100), nullable=True)
     status = Column(String(50), nullable=False)
@@ -72,6 +76,7 @@ class Record(Base):
         Index("idx_records_batch_source", "batch_id", "source_type"),
         Index("idx_records_order_id", "order_id"),
         Index("idx_records_reference_number", "reference_number"),
+        Index("idx_records_org_id", "org_id"),
     )
 
 
@@ -79,6 +84,7 @@ class Match(Base):
     __tablename__ = "matches"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id = Column(String(100), nullable=False, default="org_default", index=True)
     batch_id = Column(String(36), ForeignKey("batches.id"), nullable=False)
     settlement_record_id = Column(String(36), ForeignKey("records.id"), nullable=True)
     bank_record_id = Column(String(36), ForeignKey("records.id"), nullable=True)
@@ -98,6 +104,7 @@ class Match(Base):
 
     __table_args__ = (
         Index("idx_matches_batch_status", "batch_id", "status"),
+        Index("idx_matches_org_id", "org_id"),
     )
 
 
@@ -125,6 +132,7 @@ class ExceptionRecord(Base):
     __tablename__ = "exceptions"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id = Column(String(100), nullable=False, default="org_default", index=True)
     match_id = Column(String(36), ForeignKey("matches.id"), nullable=True)
     record_id = Column(String(36), ForeignKey("records.id"), nullable=False)
     category = Column(String(100), nullable=False)  # 30+ categories from exception_taxonomy
@@ -137,6 +145,7 @@ class ExceptionRecord(Base):
 
     __table_args__ = (
         Index("idx_exceptions_category", "category"),
+        Index("idx_exceptions_org_id", "org_id"),
     )
 
 
@@ -144,6 +153,7 @@ class MetricsSnapshot(Base):
     __tablename__ = "metrics_snapshots"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id = Column(String(100), nullable=False, default="org_default", index=True)
     batch_id = Column(String(36), ForeignKey("batches.id"), nullable=False)
     records_processed = Column(Integer, nullable=False)
     rule_matches = Column(Integer, nullable=False)
@@ -162,11 +172,16 @@ class MetricsSnapshot(Base):
 
     batch = relationship("Batch", back_populates="metrics_snapshots")
 
+    __table_args__ = (
+        Index("idx_metrics_snapshots_org_id", "org_id"),
+    )
+
 
 class FeedbackMemoryRecord(Base):
     __tablename__ = "feedback_memory"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id = Column(String(100), nullable=False, default="org_default", index=True)
     merchant_type = Column(String(50), nullable=False)
     order_id = Column(String(100), nullable=True)
     discrepancy_pattern = Column(String(100), nullable=False)
@@ -182,4 +197,5 @@ class FeedbackMemoryRecord(Base):
     __table_args__ = (
         Index("idx_feedback_merchant_pattern", "merchant_type", "discrepancy_pattern"),
         Index("idx_feedback_corrected_reason", "corrected_reason"),
+        Index("idx_feedback_org_id", "org_id"),
     )

@@ -28,7 +28,7 @@ from backend.rules import (
     find_duplicate_order_ids,
     RuleMatchResult,
 )
-from backend.ai.engine import verify_discrepancy
+from backend.ai.engine import verify_discrepancy, verify_discrepancies_clustered
 from backend.services.metrics import compute_batch_metrics
 
 

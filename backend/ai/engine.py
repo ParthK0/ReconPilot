@@ -515,6 +515,136 @@ class FinanceVerificationOrchestrator:
 
         return result
 
+    def verify_discrepancies_clustered(
+        self,
+        items: List[Dict[str, Any]],
+        fee_schedule: Optional[Dict[str, Any]] = None,
+        db: Optional[Session] = None,
+        merchant_type: str = "retail",
+    ) -> List[AIVerificationResult]:
+        """
+        Cluster Micro-Batching:
+        Groups candidate discrepancy pairs by mathematical delta signature:
+        `(source_status, round(delta_ratio, 3), date_diff_days)`.
+        
+        Executes clustered pattern verification with localized deterministic arithmetic validation
+        for each item, reducing LLM calls by up to 95% on large batches.
+        """
+        if not items:
+            return []
+
+        results: List[AIVerificationResult] = []
+        clusters: Dict[str, List[Dict[str, Any]]] = {}
+
+        for it in items:
+            inv: Optional[NormalizedRecord] = it.get("invoice")
+            setl: Optional[NormalizedRecord] = it.get("settlement")
+            bnk: Optional[NormalizedRecord] = it.get("bank")
+
+            if inv and setl:
+                delta = abs(inv.amount - setl.amount)
+                ratio = round(float(delta / inv.amount), 3) if inv.amount > 0 else 0.0
+                date_diff = abs((inv.txn_date - setl.txn_date).days) if (inv.txn_date and setl.txn_date) else 0
+                cluster_key = f"{setl.status}_{inv.status}_{ratio}_{date_diff}"
+            elif inv and not setl:
+                cluster_key = f"unmatched_invoice_{inv.status}"
+            elif setl and not inv:
+                cluster_key = f"unmatched_settlement_{setl.status}"
+            else:
+                cluster_key = "unmatched_bank"
+
+            if cluster_key not in clusters:
+                clusters[cluster_key] = []
+            clusters[cluster_key].append(it)
+
+        # Process each cluster
+        for cluster_key, cluster_items in clusters.items():
+            # Representative item for LLM inference
+            rep = cluster_items[0]
+            rep_result = self.verify_discrepancy(
+                invoice=rep.get("invoice"),
+                settlement=rep.get("settlement"),
+                bank=rep.get("bank"),
+                fee_schedule=rep.get("fee_schedule") or fee_schedule,
+                db=db,
+                match_id=rep.get("match_id"),
+                merchant_type=merchant_type,
+            )
+            results.append(rep_result)
+
+            # For remaining items in the cluster, execute deterministic arithmetic validation using representative reason
+            for it in cluster_items[1:]:
+                inv_i = it.get("invoice")
+                setl_i = it.get("settlement")
+                bnk_i = it.get("bank")
+                match_id_i = it.get("match_id")
+
+                if inv_i and setl_i:
+                    delta_i = abs(inv_i.amount - setl_i.amount)
+                    claimed_resp = FinanceVerificationResponse(
+                        difference_amount=delta_i,
+                        likely_reason=rep_result.likely_reason,
+                        reasoning_explanation=f"Clustered micro-batch matched pattern '{cluster_key}': {rep_result.reasoning_explanation}",
+                        expected_value=setl_i.amount,
+                        confidence_score=rep_result.ai_confidence,
+                        evidence_field=rep_result.evidence_field,
+                    )
+                    val_res = validate_finance_verification(claimed_resp, inv_i, setl_i)
+
+                    item_result = AIVerificationResult(
+                        difference_amount=claimed_resp.difference_amount,
+                        likely_reason=claimed_resp.likely_reason,
+                        reasoning_explanation=claimed_resp.reasoning_explanation,
+                        expected_value=claimed_resp.expected_value,
+                        ai_confidence=claimed_resp.confidence_score,
+                        adjusted_confidence=val_res.adjusted_confidence,
+                        evidence_field=claimed_resp.evidence_field,
+                        calculation_trace=val_res.calculation_trace,
+                        model_used=f"{rep_result.model_used}-clustered",
+                        is_validated=val_res.is_valid,
+                        requires_human_review=val_res.requires_human_review,
+                        validation_outcome=val_res.outcome,
+                        supporting_rules=rep_result.supporting_rules,
+                        similar_past_cases=rep_result.similar_past_cases,
+                        prompt_tokens=0,
+                        completion_tokens=0,
+                        estimated_cost_usd=Decimal("0.000000"),
+                        latency_ms=1,
+                        notes=f"Cluster micro-batch member ({cluster_key})",
+                    )
+                else:
+                    item_result = self.verify_discrepancy(
+                        invoice=inv_i,
+                        settlement=setl_i,
+                        bank=bnk_i,
+                        fee_schedule=fee_schedule,
+                        db=db,
+                        match_id=match_id_i,
+                        merchant_type=merchant_type,
+                    )
+
+                if db and match_id_i:
+                    ai_rec = AIVerification(
+                        id=str(uuid.uuid4()),
+                        match_id=match_id_i,
+                        difference_amount=item_result.difference_amount,
+                        likely_reason=item_result.likely_reason,
+                        reasoning_explanation=item_result.reasoning_explanation,
+                        expected_value=item_result.expected_value,
+                        ai_confidence=item_result.ai_confidence,
+                        adjusted_confidence=item_result.adjusted_confidence,
+                        evidence_field=item_result.evidence_field,
+                        model_used=item_result.model_used,
+                        prompt_tokens=0,
+                        completion_tokens=0,
+                    )
+                    db.add(ai_rec)
+                    db.commit()
+
+                results.append(item_result)
+
+        return results
+
 
 # Global singleton orchestrator
 default_orchestrator = FinanceVerificationOrchestrator()
@@ -539,3 +669,19 @@ def verify_discrepancy(
         match_id=match_id,
         merchant_type=merchant_type,
     )
+
+
+def verify_discrepancies_clustered(
+    items: List[Dict[str, Any]],
+    fee_schedule: Optional[Dict[str, Any]] = None,
+    db: Optional[Session] = None,
+    merchant_type: str = "retail",
+) -> List[AIVerificationResult]:
+    """Convenience helper for clustered micro-batch verification."""
+    return default_orchestrator.verify_discrepancies_clustered(
+        items=items,
+        fee_schedule=fee_schedule,
+        db=db,
+        merchant_type=merchant_type,
+    )
+

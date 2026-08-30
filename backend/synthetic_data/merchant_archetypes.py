@@ -454,16 +454,60 @@ MERCHANT_ARCHETYPES: Dict[str, MerchantArchetype] = {
         typical_settlement_window_days=2,
         common_exceptions=["tds_revision", "missing_utr", "over_settlement", "bank_maintenance", "unknown_discrepancy"],
     ),
+
+    "cross_border_saas": MerchantArchetype(
+        merchant_type="cross_border_saas",
+        display_name="CloudMatrix Global B2B SaaS",
+        description="Global subscription SaaS processing USD, EUR, and GBP with international card conversions, Razorpay 3% FX spread, and split bank tranches.",
+        fee_config_name="saas",
+        default_ticket_range=(3500.0, 185000.0),
+        invoice_columns={
+            "invoice_id": "inv_number",
+            "order_id": "subscription_order_id",
+            "amount": "gross_usd_inr",
+            "invoice_date": "bill_date",
+            "customer_name": "client_org",
+            "status": "status",
+        },
+        settlement_columns={
+            "settlement_id": "intl_payout_id",
+            "order_id": "subscription_order_id",
+            "amount": "settled_inr",
+            "settlement_date": "conversion_date",
+            "reference_number": "swift_utr",
+            "status": "status",
+            "fees": "fx_markup_fee",
+            "gst": "gst_on_fx",
+            "tds": "tax_deducted",
+        },
+        bank_columns={
+            "bank_txn_id": "swift_ref",
+            "txn_date": "credit_date",
+            "description": "narration",
+            "reference_number": "swift_utr",
+            "amount": "inr_credit",
+            "balance": "balance",
+            "status": "status",
+        },
+        currency_format="clean",
+        date_format="%Y-%m-%d",
+        primary_payment_mode="International Visa / Mastercard / AMEX",
+        typical_settlement_window_days=3,
+        common_exceptions=["fx_rate_variance", "settlement_delay", "chargeback_debit", "cross_border_withholding"],
+    ),
 }
 
 
 def get_archetype(name: str) -> MerchantArchetype:
     """Returns a registered MerchantArchetype by name."""
     norm_name = name.strip().lower()
-    if norm_name == "subscription":
+    if norm_name in ("subscription", "cloud_saas"):
         norm_name = "saas"
+    if norm_name in ("global_saas", "international_saas", "cross_border"):
+        norm_name = "cross_border_saas"
     if norm_name not in MERCHANT_ARCHETYPES:
         raise ValueError(
             f"Unknown merchant archetype '{name}'. Allowed archetypes: {list(MERCHANT_ARCHETYPES.keys())}"
         )
     return MERCHANT_ARCHETYPES[norm_name]
+

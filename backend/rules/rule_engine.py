@@ -352,6 +352,46 @@ def match_tolerance_amount(
 
 
 # ---------------------------------------------------------------------------
+# 7. Rule 7: International FX Spread & Multi-Currency Tranche Match
+# ---------------------------------------------------------------------------
+
+def match_fx_spread_tolerance(
+    invoice: Optional[NormalizedRecord] = None,
+    settlement: Optional[NormalizedRecord] = None,
+    bank: Optional[NormalizedRecord] = None,
+    max_fx_spread_pct: Decimal = Decimal("0.04"),
+) -> RuleMatchResult:
+    """
+    Rule 7: International FX Spread & Tranche Match.
+    Matches cross-border transactions where net settlement difference falls within
+    standard international FX conversion spreads (0.5% to 4.0% corridor).
+    Assigns 94% confidence.
+    """
+    if invoice and settlement:
+        if (
+            invoice.order_id
+            and settlement.order_id
+            and invoice.order_id.strip() == settlement.order_id.strip()
+            and invoice.amount > Decimal("0.00")
+            and settlement.status == "settled"
+            and invoice.status == "paid"
+        ):
+            delta = abs(invoice.amount - settlement.amount)
+            spread_pct = delta / invoice.amount
+            if Decimal("0.005") <= spread_pct <= max_fx_spread_pct:
+                return RuleMatchResult(
+                    is_matched=True,
+                    rule_name="fx_spread_tolerance",
+                    confidence=Decimal("94.00"),
+                    invoice_record=invoice,
+                    settlement_record=settlement,
+                    bank_record=bank,
+                    notes=f"Matched within international FX spread corridor ({spread_pct * 100:.2f}% variance on order '{invoice.order_id}').",
+                )
+    return RuleMatchResult(is_matched=False)
+
+
+# ---------------------------------------------------------------------------
 # Ordered Rule Engine Pipeline (FR-4)
 # ---------------------------------------------------------------------------
 
@@ -362,6 +402,7 @@ RULE_FUNCTIONS = [
     ("settlement_date_window", match_settlement_date_window),
     ("fee_gst_tds_adjusted_amount", match_fee_gst_tds_adjusted_amount),
     ("tolerance_amount_match", match_tolerance_amount),
+    ("fx_spread_tolerance", match_fx_spread_tolerance),
 ]
 
 
@@ -381,6 +422,7 @@ def apply_rules_in_order(
     4. Settlement-date window (T+2 days or config delay window)
     5. Fee / GST / TDS adjusted amount (configurable deterministic rate formulas)
     6. Tolerance amount match (|delta| <= Rs 2.00 penny band)
+    7. International FX spread tolerance (0.5% - 4.0% corridor)
     
     Returns the first matching RuleMatchResult or an unmatched result.
     """
@@ -435,4 +477,10 @@ def apply_rules_in_order(
     if res6.is_matched:
         return res6
 
+    # 7. FX Spread & Multi-Currency Tranche Match
+    res7 = match_fx_spread_tolerance(invoice=invoice, settlement=settlement, bank=bank)
+    if res7.is_matched:
+        return res7
+
     return RuleMatchResult(is_matched=False)
+

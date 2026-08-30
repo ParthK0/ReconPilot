@@ -40,9 +40,15 @@ from backend.synthetic_data.merchant_archetypes import MERCHANT_ARCHETYPES
 from backend.synthetic_data.generator import generate_merchant_dataset
 from backend.analytics.cash_position import compute_cash_position, CashPositionSnapshot
 from backend.rules.exception_taxonomy import list_exception_categories, get_exception_definition
-from backend.reports.reporter import generate_reconciliation_csv
+from backend.reports.reporter import (
+    generate_reconciliation_csv,
+    generate_tally_xml,
+    generate_zoho_books_csv,
+    generate_netsuite_journal_json,
+)
 from backend.ai.feedback_memory import feedback_store
 from backend.services.pipeline import process_reconciliation_batch
+from backend.services.job_queue import job_queue
 from backend.api.schemas import (
     ReviewMatchRequest,
     ReviewMatchResponse,
@@ -54,7 +60,7 @@ from backend.api.schemas import (
     MerchantMetadataResponse,
 )
 
-from backend.api.auth import verify_api_key
+from backend.api.auth import verify_api_key, create_access_token, get_current_tenant
 
 from sqlalchemy import text
 
@@ -661,3 +667,149 @@ def export_batch_csv(batch_id: str, db: Session = Depends(get_db)):
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename=recon_report_batch_{batch_id[:8]}.csv"},
     )
+
+
+@router.post("/api/v1/auth/token")
+@router.post("/auth/token", include_in_schema=False)
+def generate_auth_token(payload: Dict[str, Any]):
+    """
+    Generates a cryptographically signed HMAC-SHA256 JWT access token for tenant authentication.
+    Payload: {"org_id": "org_xyz", "client_name": "MerchantCorp"}
+    """
+    org_id = payload.get("org_id", "org_default")
+    token = create_access_token(payload={"org_id": org_id, "sub": payload.get("client_name", org_id)})
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "org_id": org_id,
+        "expires_in_hours": 24,
+    }
+
+
+@router.post("/api/v1/reconciliation/jobs")
+@router.post("/reconciliation/jobs", include_in_schema=False)
+def submit_reconciliation_job(
+    payload: Dict[str, Any],
+    tenant_id: str = Depends(get_current_tenant),
+    _auth: bool = Depends(verify_api_key),
+):
+    """
+    POST /api/v1/reconciliation/jobs:
+    Submits a reconciliation batch job for asynchronous background execution.
+    Returns job_id and initial progress state without blocking ASGI workers.
+    """
+    batch_id = payload.get("batch_id")
+    if not batch_id:
+        raise HTTPException(status_code=400, detail="batch_id is required")
+
+    merchant_type = payload.get("merchant_type", "retail")
+    ground_truth = payload.get("ground_truth")
+
+    job_id = job_queue.submit_job(
+        batch_id=batch_id,
+        org_id=tenant_id,
+        ground_truth=ground_truth,
+        merchant_type=merchant_type,
+    )
+
+    return {
+        "job_id": job_id,
+        "batch_id": batch_id,
+        "status": "queued",
+        "progress": 0.0,
+        "message": "Reconciliation job submitted successfully to background worker pool.",
+    }
+
+
+@router.get("/api/v1/reconciliation/jobs/{job_id}")
+@router.get("/reconciliation/jobs/{job_id}", include_in_schema=False)
+def get_reconciliation_job_status(job_id: str):
+    """
+    GET /api/v1/reconciliation/jobs/{job_id}:
+    Returns real-time background job execution status, stage, and completion metrics.
+    """
+    job = job_queue.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Reconciliation job not found")
+    return job.model_dump()
+
+
+@router.get("/api/v1/batches/{batch_id}/erp-journal")
+@router.get("/batches/{batch_id}/erp-journal", include_in_schema=False)
+def export_erp_journal(
+    batch_id: str,
+    format: str = Query("tally", pattern="^(tally|zoho|netsuite)$"),
+    db: Session = Depends(get_db),
+):
+    """
+    1-Click ERP Journal Export.
+    Formats:
+    - tally: Tally Prime XML envelope import
+    - zoho: Zoho Books manual journal CSV
+    - netsuite: NetSuite SuiteTalk JSON journal schema
+    """
+    matches = db.query(Match).filter(Match.batch_id == batch_id).all()
+    if not matches:
+        raise HTTPException(status_code=404, detail="No matches found for this batch")
+
+    batch_records = db.query(Record).filter(Record.batch_id == batch_id).all()
+    rec_lookup: Dict[str, Record] = {r.id: r for r in batch_records}
+
+    match_ids = [m.id for m in matches]
+    ai_verifications = db.query(AIVerification).filter(AIVerification.match_id.in_(match_ids)).all() if match_ids else []
+    ai_map: Dict[str, AIVerification] = {a.match_id: a for a in ai_verifications}
+
+    matches_data = []
+    adjustments_data = []
+
+    for m in matches:
+        settle_rec = rec_lookup.get(m.settlement_record_id) if m.settlement_record_id else None
+        inv_rec = rec_lookup.get(m.invoice_record_id) if m.invoice_record_id else None
+        bank_rec = rec_lookup.get(m.bank_record_id) if m.bank_record_id else None
+        ai_ver = ai_map.get(m.id)
+
+        gross = inv_rec.amount if inv_rec else (settle_rec.amount if settle_rec else Decimal("0.00"))
+        fee = settle_rec.fees if settle_rec else Decimal("0.00")
+        gst = settle_rec.gst if settle_rec else Decimal("0.00")
+        bank_amt = bank_rec.amount if bank_rec else (settle_rec.amount if settle_rec else gross - fee - gst)
+
+        item_dict = {
+            "match_id": m.id,
+            "invoice_amount": float(gross),
+            "fees": float(fee),
+            "gst": float(gst),
+            "bank_amount": float(bank_amt),
+            "status": m.status,
+        }
+        matches_data.append(item_dict)
+
+        if ai_ver and m.status == "exception":
+            adjustments_data.append({
+                "difference_amount": float(ai_ver.difference_amount),
+                "reason": ai_ver.likely_reason,
+            })
+
+    if format == "tally":
+        content = generate_tally_xml(batch_id, matches_data, adjustments_data)
+        return Response(
+            content=content,
+            media_type="application/xml",
+            headers={"Content-Disposition": f"attachment; filename=tally_journal_batch_{batch_id[:8]}.xml"},
+        )
+    elif format == "zoho":
+        content = generate_zoho_books_csv(batch_id, matches_data, adjustments_data)
+        return Response(
+            content=content,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=zoho_journal_batch_{batch_id[:8]}.csv"},
+        )
+    elif format == "netsuite":
+        content = generate_netsuite_journal_json(batch_id, matches_data, adjustments_data)
+        return Response(
+            content=content,
+            media_type="application/json",
+            headers={"Content-Disposition": f"attachment; filename=netsuite_journal_batch_{batch_id[:8]}.json"},
+        )
+    else:
+        raise HTTPException(status_code=400, detail="Invalid ERP format")
+
