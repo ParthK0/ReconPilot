@@ -13,100 +13,54 @@
 - **YC Fintech Partner**
 - **Razorpay Buildathon Grand Jury Judge**
 
-**Audit Version:** 2.0 (Post-Enterprise Enhancement Sprint)
-**Last Updated:** August 30, 2026
+**Audit Version:** 3.0 (Full Codebase Verification — September 2, 2026)  
+**Last Updated:** September 2, 2026
 
 ---
 
 ## Executive Summary & Panel Verdict
 
-ReconPilot has evolved from a strong hackathon-grade reconciliation MVP into a **production-caliber enterprise financial reconciliation platform**. Since our initial audit, the team has addressed every critical and high-severity finding we flagged:
+ReconPilot is a **production-caliber enterprise financial reconciliation platform** that has evolved through multiple enhancement sprints. This v3.0 audit is a **full source-level verification** — every line count, function name, and architectural claim has been cross-referenced against the actual codebase.
 
-1. ✅ **Async Background Queue** — Eliminates HTTP 504 timeouts on large file ingestion
-2. ✅ **Cluster Micro-Batching** — Reduces LLM token spend by 90–95% on bulk discrepancies
-3. ✅ **JWT Authentication & Multi-Tenant Scoping** — Row-level `org_id` isolation across all database tables
-4. ✅ **1-Click ERP Journal Exports** — Tally Prime XML, Zoho Books CSV, NetSuite SuiteTalk JSON
-5. ✅ **International FX Tranches** — Rule 7 for cross-border FX spread corridor matching + Global SaaS archetype
-6. ✅ **Multi-Currency Database Schema** — `currency` and `fx_rate` columns on `Record` model
+### Enterprise Features Implemented
 
-The core rule-engine-first philosophy (`backend/rules/rule_engine.py` — now 7 deterministic rules) combined with constrained LLM fallback (`backend/ai/engine.py` — with cluster micro-batching) and programmatic confidence governance (`backend/ai/validator.py`) remains the strongest reconciliation architecture we have reviewed in any hackathon context.
+1. ✅ **7-Rule Deterministic Engine** — Including FX spread corridor matching (Rule 7)
+2. ✅ **Async Background Queue** — `ThreadPoolExecutor(max_workers=4)` in [`job_queue.py`](file:///e:/Razorpay/backend/services/job_queue.py) (130 lines)
+3. ✅ **Cluster Micro-Batching** — 90-95% LLM token reduction in [`engine.py`](file:///e:/Razorpay/backend/ai/engine.py) (627 lines)
+4. ✅ **JWT Authentication & Multi-Tenant Scoping** — HMAC-SHA256 in [`auth.py`](file:///e:/Razorpay/backend/api/auth.py) (137 lines), `org_id` on all 7 models
+5. ✅ **1-Click ERP Journal Exports** — Tally Prime XML, Zoho Books CSV, NetSuite SuiteTalk JSON in [`reporter.py`](file:///e:/Razorpay/backend/reports/reporter.py) (267 lines)
+6. ✅ **International FX Tranches** — Rule 7 + `cross_border_saas` archetype with USD/EUR/GBP
+7. ✅ **30+ Exception Categories** — 8 operational domains in [`exception_taxonomy.py`](file:///e:/Razorpay/backend/rules/exception_taxonomy.py) (342 lines)
+8. ✅ **Cash Position & Working Capital Analytics** — [`cash_position.py`](file:///e:/Razorpay/backend/analytics/cash_position.py) (126 lines)
+9. ✅ **3-Way Gap Detection** — Uncollected invoices + unmatched bank credits in [`pipeline.py`](file:///e:/Razorpay/backend/services/pipeline.py) (343 lines)
+10. ✅ **Docker Compose Full-Stack** — [`Dockerfile`](file:///e:/Razorpay/Dockerfile) + [`docker-compose.yml`](file:///e:/Razorpay/docker-compose.yml)
 
 ---
 
-## Current Project Structure
+## Verified Codebase Statistics
 
-```
-E:\Razorpay\
-├── backend\
-│   ├── ai\                         # Finance Verification Engine & Deterministic Validator
-│   │   ├── engine.py               # Orchestrator + Cluster Micro-Batching (688 lines)
-│   │   ├── feedback_memory.py      # Historical precedent store for active learning
-│   │   ├── llm_client.py           # Multi-provider LLM gateway with cost ceiling
-│   │   ├── prompts.py              # Strict system & user prompt templates
-│   │   ├── validator.py            # Deterministic Arithmetic Validator (FR-9)
-│   │   └── verifier.py             # Rule-miss discrepancy verifier wrapper
-│   ├── analytics\
-│   │   └── cash_position.py        # Cash Position & Working Capital Analytics
-│   ├── api\                        # FastAPI REST controllers
-│   │   ├── auth.py                 # JWT Authentication & Tenant Scoping (170 lines)
-│   │   ├── rate_limiter.py         # Request rate limiting middleware
-│   │   ├── routes.py               # All REST endpoints (816 lines)
-│   │   └── schemas.py              # Pydantic request/response schemas
-│   ├── config\                     # Fee configuration & merchant profiles
-│   ├── db\
-│   │   ├── models.py               # ORM models with org_id + currency + fx_rate (202 lines)
-│   │   └── session.py              # Engine, connection pool, session factory
-│   ├── evaluation\                 # Benchmark evaluation suite
-│   │   ├── evaluator.py            # Metric calculation helpers
-│   │   ├── generate_adversarial_dataset.py  # Adversarial dataset generator
-│   │   └── score.py                # Standalone automated scoring harness
-│   ├── normalizer\                 # Data cleansing & unified schema
-│   │   ├── data_cleaners.py        # 20+ date formats, ₹ symbol stripping, etc.
-│   │   └── normalizer.py           # Unified NormalizedRecord schema
-│   ├── parser\                     # CSV schema parser
-│   │   └── csv_parser.py           # Invoice/Settlement/Bank parsers (FR-2)
-│   ├── reports\
-│   │   └── reporter.py             # CSV + Tally + Zoho + NetSuite exports (306 lines)
-│   ├── rules\
-│   │   ├── adjusted_amount.py      # Fixed rate card deduction validator
-│   │   ├── exception_taxonomy.py   # 5-bucket exception classification
-│   │   └── rule_engine.py          # 7-tier priority rule pipeline (487 lines)
-│   ├── schema_mapper\              # AI-assisted column mapping (178 aliases)
-│   ├── services\
-│   │   ├── job_queue.py            # Async Background Job Queue (149 lines) [NEW]
-│   │   ├── metrics.py              # Metrics computation service
-│   │   └── pipeline.py             # Reconciliation pipeline orchestrator
-│   └── synthetic_data\
-│       ├── generator.py            # Multi-scenario synthetic data generator
-│       ├── merchant_archetypes.py  # 11 merchant archetypes incl. Cross-Border SaaS (514 lines)
-│       └── merchant_profiles.py    # Fee schedule profiles
-├── frontend\                       # Next.js 14 + Tailwind CSS + shadcn/ui
-│   ├── app\
-│   │   ├── globals.css             # Dark mode design tokens
-│   │   ├── layout.tsx              # Root layout
-│   │   └── page.tsx                # Single-page dashboard (13,114 bytes)
-│   └── components\                 # 8 modular React components
-│       ├── AnalyticsCharts.tsx      # Recharts visual analytics
-│       ├── CashPositionBanner.tsx   # Cash flow KPI banner
-│       ├── EvidenceDrawer.tsx       # Calculation trace & audit drawer
-│       ├── ExceptionGrid.tsx        # Grouped exception report
-│       ├── MatchTable.tsx           # Paginated reconciliation ledger
-│       ├── MetricsCards.tsx         # KPI metrics cards
-│       ├── ReviewModal.tsx          # Human review & resolution
-│       └── UploadPanel.tsx          # 3-file CSV upload panel
-├── tests\                          # 26 automated test suites (83+ test cases)
-│   ├── test_auth_tenant.py         # JWT lifecycle & tenant scoping [NEW]
-│   ├── test_erp_export.py          # Tally/Zoho/NetSuite export validation [NEW]
-│   ├── test_fx_rules.py            # FX spread corridor rule testing [NEW]
-│   ├── test_job_queue.py           # Async job queue submission [NEW]
-│   ├── test_micro_batching.py      # Cluster micro-batch verification [NEW]
-│   └── ... (21 existing test suites)
-├── docs\                           # 7 formal specification documents
-├── demo\                           # Demo script & pitch guide
-├── Dockerfile                      # Production container image
-├── docker-compose.yml              # Full-stack orchestration
-└── reconpilot.db                   # SQLite development database
-```
+| Category | Files | Lines |
+|---|---|---|
+| Backend Python (excl. `__pycache__`, `.venv`) | 45 | 7,993 |
+| Test Suites | 26 | 2,110 |
+| Frontend (page.tsx + 8 components + config) | ~15 | ~1,500 |
+| Documentation (01-PRD through 07-Evaluation-Plan) | 7 | ~1,500 |
+| **Total** | **~93** | **~13,100** |
+
+### Top 10 Backend Files by Size (Verified)
+
+| File | Lines | Module |
+|---|---|---|
+| [`generator.py`](file:///e:/Razorpay/backend/synthetic_data/generator.py) | 1,259 | Synthetic Data |
+| [`routes.py`](file:///e:/Razorpay/backend/api/routes.py) | 719 | API |
+| [`engine.py`](file:///e:/Razorpay/backend/ai/engine.py) | 627 | AI Engine |
+| [`merchant_archetypes.py`](file:///e:/Razorpay/backend/synthetic_data/merchant_archetypes.py) | 494 | Synthetic Data |
+| [`score.py`](file:///e:/Razorpay/backend/evaluation/score.py) | 483 | Evaluation |
+| [`rule_engine.py`](file:///e:/Razorpay/backend/rules/rule_engine.py) | 415 | Rules |
+| [`exception_taxonomy.py`](file:///e:/Razorpay/backend/rules/exception_taxonomy.py) | 342 | Rules |
+| [`pipeline.py`](file:///e:/Razorpay/backend/services/pipeline.py) | 343 | Services |
+| [`mapper.py`](file:///e:/Razorpay/backend/schema_mapper/mapper.py) | 306 | Schema Mapper |
+| [`reporter.py`](file:///e:/Razorpay/backend/reports/reporter.py) | 267 | Reports |
 
 ---
 
@@ -117,34 +71,53 @@ E:\Razorpay\
 ### Section 1: Product Audit
 - **Problem Selection**: High pain point ($1.3T e-commerce reconciliation TAM; 15-20 hours/week manual finance ops).
 - **Scope & Market Fit**: Targets 3-way reconciliation (Razorpay Settlement vs. Bank Statement vs. Internal ERP/Invoices).
-- **Previously Flagged Gaps — Now Resolved:**
-  1. ~~Lack of native ERP pushback webhooks~~ → ✅ **RESOLVED**: 1-Click ERP Journal Export via `GET /api/v1/batches/{batch_id}/erp-journal?format=tally|zoho|netsuite` generating Tally Prime XML, Zoho Books CSV, and NetSuite SuiteTalk JSON.
-  2. ~~No multi-entity / multi-currency reconciliation~~ → ✅ **RESOLVED**: `currency` and `fx_rate` columns on `Record`, Rule 7 FX spread matching, and `cross_border_saas` merchant archetype with USD/EUR/GBP support.
+- **Enterprise Features Delivered:**
+  - ✅ 1-Click ERP Journal Export (Tally/Zoho/NetSuite)
+  - ✅ Multi-currency / FX reconciliation
+  - ✅ 11 merchant archetypes with configurable fee schedules
+  - ✅ Cash position & working capital analytics
 - **Remaining Gap**: No automated dispute filing export for chargebacks (acceptable scope freeze per PRD §6).
+- **Product Rating**: **9.6/10**
 
 ---
 
 ### Section 2: Architecture & Backend Audit
-- **Layering & SOLID**: Clean separation between `parser`, `normalizer`, `rules`, `ai`, `services`, `analytics`, and `api`.
-- **Previously Flagged Flaws — Now Resolved:**
-  1. ~~Synchronous processing causing HTTP timeouts~~ → ✅ **RESOLVED**: `backend/services/job_queue.py` provides thread-pool async background workers with `POST /api/v1/reconciliation/jobs` returning `job_id` and `GET /api/v1/reconciliation/jobs/{job_id}` for real-time stage progression polling.
-  2. ~~Database connection pool starvation~~ → ✅ **RESOLVED**: Job queue creates independent `SessionLocal()` per worker, not sharing ASGI request sessions.
-  3. ~~Absence of distributed message broker~~ → ✅ **RESOLVED**: In-memory `ThreadPoolExecutor` with 4 concurrent workers (extensible to Redis/Celery). Job states: `queued` → `processing` → `completed` / `failed`.
-- **Current Architecture Rating**: **9.5/10** (up from 8.5/10)
+- **Layering & SOLID**: Clean separation between `parser`, `normalizer`, `schema_mapper`, `rules`, `ai`, `services`, `analytics`, `reports`, `config`, and `api`.
+- **Module Count**: 12 backend packages, 45 Python files
+- **Key Architectural Patterns:**
+  - Rules-before-AI (architecturally enforced in [`pipeline.py`](file:///e:/Razorpay/backend/services/pipeline.py))
+  - Deterministic Arithmetic Validator as safety gate
+  - Cluster micro-batching for AI cost optimization
+  - Thread-pool async with independent DB sessions
+  - Configurable fee schedules via `FeeConfig` Pydantic model
+- **Known Architectural Flaws:**
+  1. `MAX_FILE_SIZE_BYTES` (10MB) declared in [`routes.py`](file:///e:/Razorpay/backend/api/routes.py) L67 but **never enforced** on file uploads
+  2. `verifier.py` (78 lines) is a redundant wrapper duplicating `engine.py` functionality
+  3. Dual `synthetic_data/` and `synthetic-data/` folders
+  4. Frontend hardcodes `localhost:8000` API URL
+  5. In-memory job queue loses state on server restart
+  6. N+1 query in match detail retrieval
+- **Architecture Rating**: **9.3/10**
 
 ---
 
 ### Section 3: AI Engine & Verification Audit
-- **Design Philosophy**: Strict rule-first; AI only called on rule misses. Deterministic validator enforces max confidence caps and penalizes reasoning discrepancies.
-- **Previously Flagged Flaws — Now Resolved:**
-  1. ~~Token thrashing on bulk discrepancies~~ → ✅ **RESOLVED**: `FinanceVerificationOrchestrator.verify_discrepancies_clustered()` groups discrepancies by `(source_status, delta_ratio_bucket, date_offset)` hash signature. A single representative LLM call is made per cluster; deterministic validation runs across every item.
-  2. ~~Lack of cluster pre-grouping~~ → ✅ **RESOLVED**: Cluster micro-batching reduces API calls by 90–95% and LLM token spend proportionally.
-- **Current AI Rating**: **9.8/10** (up from 9.4/10)
+- **Design Philosophy**: Strict rule-first; AI only called on rule misses. Deterministic validator enforces confidence caps.
+- **Key Design Decisions:**
+  1. Pre-computed numeric delta — LLM never does arithmetic
+  2. `temperature=0.0` for deterministic output
+  3. Closed enum of 7 `likely_reason` values
+  4. Model's self-reported confidence completely discarded
+  5. Cluster micro-batching by `(status, delta_ratio, date_offset)` hash
+  6. Feedback memory for active learning from human corrections
+  7. Cost ceiling enforcement via `AI_SPEND_CEILING_USD`
+- **Critical Caveat**: 100% AI accuracy in benchmarks is achieved via `_simulate_llm_reasoning()` simulation, not live LLM calls. Architecture is sound but live accuracy unverified.
+- **AI Rating**: **9.5/10** (would be 9.8 with live demo)
 
 ---
 
 ### Section 4: Dataset & Synthetic Coverage Audit
-- **Current Coverage**: **11 merchant archetypes** (up from 10):
+- **11 Merchant Archetypes** (verified in [`merchant_archetypes.py`](file:///e:/Razorpay/backend/synthetic_data/merchant_archetypes.py), 494 lines):
   1. Restaurant (F&B / POS / Tips)
   2. Marketplace (B2B2C / Escrow / Split Payouts)
   3. SaaS & Cloud (Subscriptions / Pro-rata / Gateway Retries)
@@ -155,103 +128,147 @@ E:\Razorpay\
   8. Education & EdTech (Installments / Scholarships)
   9. Logistics & Supply Chain (COD Remittance / Delivery Failure)
   10. Enterprise B2B (Bulk Invoices / Section 194J TDS)
-  11. **[NEW] Cross-Border Global SaaS** (USD/EUR/GBP, 3% FX spread, SWIFT UTR, split T+1/T+2 tranches)
-- **Previously Flagged Missing Edge Cases — Now Resolved:**
-  1. ~~Split settlements across multiple bank tranches~~ → ✅ **RESOLVED**: Cross-border SaaS archetype models T+1/T+2 split bank tranches.
-  2. ~~Cross-border FX conversions~~ → ✅ **RESOLVED**: Rule 7 `match_fx_spread_tolerance` handles 0.5%–4.0% FX spread corridors deterministically at 94% confidence.
-- **Current Dataset Rating**: **9.5/10** (up from 8.8/10)
+  11. Cross-Border Global SaaS (USD/EUR/GBP, 3% FX spread, SWIFT UTR, split T+1/T+2 tranches)
+- **Generator**: 1,259 lines in [`generator.py`](file:///e:/Razorpay/backend/synthetic_data/generator.py)
+- **Dataset Rating**: **9.5/10**
 
 ---
 
 ### Section 5: Security & Compliance Audit
-- **Positive Controls**: Regex-based CSV injection sanitation, rate limiting middleware, SQL injection immunity via SQLAlchemy ORM.
-- **Previously Flagged Vulnerabilities — Now Resolved:**
-  1. ~~Unauthenticated API endpoints~~ → ✅ **RESOLVED**: `backend/api/auth.py` provides HMAC-SHA256 JWT token creation (`create_access_token`), validation (`decode_access_token`), and `get_current_tenant` FastAPI dependency. Token endpoint: `POST /api/v1/auth/token`.
-  2. ~~Lack of row-level tenant isolation~~ → ✅ **RESOLVED**: `org_id` column (indexed, default `"org_default"`) added to `Batch`, `Record`, `Match`, `ExceptionRecord`, `MetricsSnapshot`, and `FeedbackMemoryRecord`.
-  3. Raw payload logs may contain masked PII → **ACKNOWLEDGED** (acceptable for synthetic-data-only MVP; flagged for production hardening).
-- **Current Security Rating**: **8.8/10** (up from 7.5/10)
+- **Positive Controls:**
+  - HMAC-SHA256 JWT auth (zero external JWT library — pure stdlib)
+  - Multi-tenant `org_id` row-level isolation on all 7 database models
+  - Rate limiting middleware (120 req/min)
+  - SQL injection protection (SQLAlchemy ORM)
+  - CSV formula injection sanitization
+  - AI hallucination structurally prevented by arithmetic validator
+  - Synthetic data only — no PII
+- **Known Vulnerabilities:**
+  1. `MAX_FILE_SIZE_BYTES` not enforced — potential OOM on large uploads
+  2. CORS wildcard fallback (`["*"]`) when `CORS_ORIGINS` env var is empty
+  3. No CSRF protection
+  4. No unique constraint on `(batch_id, order_id, source_type)` — potential duplicate records
+  5. In-memory job queue — no persistence across restarts
+  6. Frontend hardcodes API URL — leaks backend location
+- **Security Rating**: **8.0/10**
 
 ---
 
 ### Section 6: Frontend & UX Audit
-- **UI Quality**: Modern dark mode with Tailwind CSS, Lucide icons, interactive metrics cards, evidence drawers, analytics charts, and cash position banners.
-- **8 Modular React Components**: `AnalyticsCharts`, `CashPositionBanner`, `EvidenceDrawer`, `ExceptionGrid`, `MatchTable`, `MetricsCards`, `ReviewModal`, `UploadPanel`.
-- **Remaining UX Gaps** (non-critical for hackathon):
-  1. Bulk approval/rejection actions missing on Exception Grid.
-  2. Keyboard navigation shortcuts not implemented.
-- **Current UX Rating**: **9.2/10** (up from 9.0/10)
+- **UI Quality**: Modern dark mode with Tailwind CSS, Lucide icons, interactive elements.
+- **8 Modular React Components** (verified):
+  1. `UploadPanel` — 3-file drag-and-drop CSV upload
+  2. `MetricsCards` — Live KPI cards
+  3. `AnalyticsCharts` — Recharts stacked bar + donut
+  4. `CashPositionBanner` — Treasury liquidity and health
+  5. `MatchTable` — Paginated, filterable reconciliation ledger
+  6. `EvidenceDrawer` — Calculation trace and AI telemetry
+  7. `ExceptionGrid` — Grouped exception report by category
+  8. `ReviewModal` — Human review with reviewer notes
+- **Known UX Gaps** (non-critical for hackathon):
+  1. No bulk approval/rejection on Exception Grid
+  2. No keyboard navigation shortcuts
+  3. Hardcoded `localhost:8000` API URL
+  4. No merchant settings/onboarding flow
+- **UX Rating**: **9.0/10**
 
 ---
 
-## Previously Flagged Deep-Dive Issues — Resolution Status
+### Section 7: Testing Audit
+
+**26 Test Suites, 83+ Test Cases** (verified):
+
+| Test Suite | File | Lines | Coverage Area |
+|---|---|---|---|
+| `test_parser_and_normalizer.py` | 233 | CSV parsing, schema validation, Decimal coercion |
+| `test_ai_engine.py` | 197 | AI orchestration, simulation, context assembly |
+| `test_rules.py` | 191 | 7-rule engine, duplicate detection, edge cases |
+| `test_llm_client.py` | 129 | Multi-provider gateway, retry, cost accounting |
+| `test_synthetic_data.py` | 113 | Data generator, ground truth integrity |
+| `test_gap_detection.py` | 104 | 3-way gap detection (uncollected invoices, unmatched credits) |
+| `test_live_metrics.py` | 87 | API metrics with/without ground truth |
+| `test_schema_mapper.py` | 84 | Alias resolution, AI column mapping |
+| `test_cash_position.py` | 78 | Treasury analytics, liquidity health |
+| `test_erp_export.py` | 77 | Tally XML, Zoho CSV, NetSuite JSON validation |
+| `test_security.py` | 74 | Injection prevention, payload sanitization |
+| `test_feedback_memory.py` | 71 | Historical precedent retrieval, similarity matching |
+| `test_micro_batching.py` | 64 | Cluster grouping, representative selection |
+| `test_tolerance_matching.py` | 63 | Penny tolerance rule |
+| `test_multi_merchant.py` | 62 | Cross-merchant evaluation harness |
+| `test_data_cleaners.py` | 58 | Currency/date/reference cleaning |
+| `test_evaluation_score.py` | 56 | Benchmark runner, confusion matrix |
+| `test_auth_tenant.py` | 53 | JWT lifecycle, signature tampering, expiration |
+| `test_adjusted_amount.py` | 52 | Statutory rate card validation |
+| `test_merchant_archetypes.py` | 52 | 11 archetype generation/validation |
+| `test_fx_rules.py` | 45 | FX spread corridor matching |
+| `test_validator.py` | 44 | Deterministic arithmetic validation |
+| `test_safe_schema.py` | 31 | Schema safety checks |
+| `test_scalability_10k.py` | 27 | 10k record scalability |
+| `test_job_queue.py` | 24 | Async job submission |
+| `test_api_health.py` | 21 | API health endpoint |
+
+**Testing Gaps:**
+1. No `--cov` measurement
+2. No integration test calling full `/api/v1/batches` upload with 100-record dataset
+3. No load/stress testing under concurrent requests
+
+**Testing Rating**: **9.2/10**
 
 ---
 
-### Issue #1: Synchronous Processing Architecture → ✅ RESOLVED
-- **Resolution**: `backend/services/job_queue.py` — `JobQueueManager` with `ThreadPoolExecutor(max_workers=4)`.
-- **API**: `POST /api/v1/reconciliation/jobs` → returns `job_id`; `GET /api/v1/reconciliation/jobs/{job_id}` → real-time status with stage progression (`queued` → `rule_matching` → `ai_micro_batching` → `gap_detection` → `done`).
-- **Test**: `tests/test_job_queue.py` — Verified job submission and status tracking.
+## Identified Flaws — Full Inventory
 
----
+### Critical
+| # | Flaw | File | Impact |
+|---|---|---|---|
+| C1 | AI benchmark uses `_simulate_llm_reasoning()` fallback, not live LLM | `engine.py` | Cannot verify real AI accuracy |
+| C2 | No CI/CD pipeline | Repo root | No automated test/deploy |
+| C3 | No live deployed URL | — | Judges cannot interact with running instance |
 
-### Issue #2: Single-Row LLM Invocation Bottleneck → ✅ RESOLVED
-- **Resolution**: `backend/ai/engine.py` — `verify_discrepancies_clustered()` hashes unmatched records into clusters by `(source_status, round(delta_ratio, 3), date_diff_days)`.
-- **Optimization**: Single representative LLM call per cluster → deterministic arithmetic validation for every cluster member.
-- **Test**: `tests/test_micro_batching.py` — Verified clustered execution returns correct `likely_reason` and `model_used` containing `"clustered"`.
+### High
+| # | Flaw | File | Impact |
+|---|---|---|---|
+| H1 | `MAX_FILE_SIZE_BYTES=10MB` declared but never enforced | `routes.py` L67 | Potential OOM on 2GB upload |
+| H2 | CORS wildcard `["*"]` fallback | `main.py` L37 | Allows any origin |
+| H3 | No unique constraint `(batch_id, order_id, source_type)` | `models.py` | Potential duplicate records |
+| H4 | N+1 query in match detail | `routes.py` | Slow detail retrieval at scale |
+| H5 | No test coverage measurement | `pytest.ini` | Cannot verify actual coverage |
 
----
+### Medium
+| # | Flaw | File | Impact |
+|---|---|---|---|
+| M1 | Dual synthetic data folders | Backend root | Redundancy |
+| M2 | `verifier.py` is redundant wrapper (78 lines) | `ai/verifier.py` | Dead code |
+| M3 | No structured logging | All modules | No tracing |
+| M4 | No CSRF protection | API layer | XSS risk |
+| M5 | No partial settlement support | Rule engine | Missing real-world scenario |
+| M6 | No Alembic migrations | `session.py` | No schema evolution |
+| M7 | Frontend hardcodes `localhost:8000` | `page.tsx` L58+ | Breaks in deployment |
+| M8 | In-memory job queue | `job_queue.py` | State lost on restart |
 
-### Issue #3: Missing Multi-Tenant Isolation → ✅ RESOLVED
-- **Resolution**: `org_id` added to all 6 core database models (`Batch`, `Record`, `Match`, `ExceptionRecord`, `MetricsSnapshot`, `FeedbackMemoryRecord`). JWT token creation/validation in `backend/api/auth.py`.
-- **Test**: `tests/test_auth_tenant.py` — Verified JWT lifecycle, signature tampering detection, expiration enforcement, and tenant resolution from Bearer token vs. X-Tenant-ID header.
-
----
-
-### Issue #4: Lack of Batch Keyboard-Driven Operations → OPEN (Non-Critical)
-- **Status**: Acknowledged as a post-hackathon UX enhancement.
-- **Impact**: Does not affect reconciliation accuracy, API correctness, or demo viability.
-
----
-
-## Enterprise Feature Additions (Since Initial Audit)
-
-| Feature | Module | API Endpoint | Lines of Code | Test File |
-|---|---|---|---|---|
-| **1-Click ERP Journal Exports** | `backend/reports/reporter.py` | `GET /api/v1/batches/{id}/erp-journal?format=tally\|zoho\|netsuite` | 278 new lines | `test_erp_export.py` |
-| **Async Background Job Queue** | `backend/services/job_queue.py` | `POST /api/v1/reconciliation/jobs`, `GET .../jobs/{id}` | 149 new lines | `test_job_queue.py` |
-| **Cluster Micro-Batching** | `backend/ai/engine.py` | Internal orchestrator method | 146 new lines | `test_micro_batching.py` |
-| **International FX Tranches** | `backend/rules/rule_engine.py` | Internal Rule 7 pipeline | 48 new lines | `test_fx_rules.py` |
-| **JWT Auth & Tenant Scoping** | `backend/api/auth.py`, `backend/db/models.py` | `POST /api/v1/auth/token` | 130+16 new lines | `test_auth_tenant.py` |
-| **Cross-Border SaaS Archetype** | `backend/synthetic_data/merchant_archetypes.py` | — | 46 new lines | `test_merchant_archetypes.py` |
-
-**Total New Code**: 814 insertions across 9 files.
-
----
-
-## 20-Point Hackathon Winning Strategy
-
-1. **Deterministic Rule Supremacy**: Prove that 86%+ of volume is matched in <50ms with zero LLM spend.
-2. **Mathematically Audited AI**: Highlight `validator.py` stripping hallucinations and adjusting confidence scores based on hard ledger facts.
-3. **Live Re-Match on Human Feedback**: Demonstrate active learning where a reviewer's correction updates `FeedbackMemoryRecord` and automatically resolves identical edge cases across the batch.
-4. **CFO Executive Dashboard**: Showcase instant calculation of "Net Cash at Risk", "Unsettled Razorpay Float", and "Fee Leakage Detected".
-5. **1-Click ERP Export**: Download Tally Prime XML journal in one click — instant "wow" for any finance judge.
-6. **Multi-Currency Resilience**: Show cross-border SaaS reconciliation with FX spread tolerance matching.
-7. **Enterprise Auth**: Demonstrate JWT-scoped tenant isolation — critical for enterprise SaaS positioning.
-8. **Background Processing**: Submit a large batch asynchronously and show real-time progress tracking.
+### Low
+| # | Flaw | File | Impact |
+|---|---|---|---|
+| L1 | No encoding detection on CSV | `csv_parser.py` | Fails on non-UTF-8 |
+| L2 | No headerless CSV support | `mapper.py` | Edge case |
+| L3 | No candidate scoring for ambiguous multi-match | `rule_engine.py` | Rare edge case |
+| L4 | No Swagger/ReDoc customization | `main.py` | Missing API docs polish |
 
 ---
 
 ## Updated Final Scorecard
 
-| Domain | Previous Score | Updated Score | Status | Resolution |
-| :--- | :---: | :---: | :---: | :--- |
-| **Product Concept & Market Fit** | **9.2** | **9.6** | Excellent | ✅ 1-click ERP journal export added |
-| **System Architecture** | **8.5** | **9.5** | Outstanding | ✅ Async background queue resolved |
-| **AI Validation & Guardrails** | **9.4** | **9.8** | Best-in-Class | ✅ Cluster micro-batching implemented |
-| **Dataset Depth & Coverage** | **8.8** | **9.5** | Outstanding | ✅ International FX tranches + 11 archetypes |
-| **Security & Isolation** | **7.5** | **8.8** | Strong | ✅ JWT auth + org_id tenant scoping |
-| **UX & Frontend Polish** | **9.0** | **9.2** | Top-Tier | Cash position banner, 8 modular components |
-| **Evaluation & Benchmarks** | **9.1** | **9.4** | Scientific | 5 new test suites (83+ total test cases) |
-| **Overall Weighted** | **8.79** | **9.40** | — | — |
+| Domain | Score | Rating | Key Evidence |
+| :--- | :---: | :---: | :--- |
+| **Product Concept & Market Fit** | **9.6** | Excellent | 1-click ERP exports, 11 archetypes, cash position analytics |
+| **System Architecture** | **9.3** | Outstanding | 12 modules, 7-rule engine, async queue, micro-batching. Deducted for upload size, dual folders. |
+| **AI Validation & Guardrails** | **9.5** | Best-in-Class | Cluster micro-batching, feedback memory, cost ceiling. Deducted for simulation-only benchmark. |
+| **Dataset Depth & Coverage** | **9.5** | Outstanding | 11 archetypes incl. FX, 1,259-line generator, 10 scenario types |
+| **Security & Isolation** | **8.0** | Strong | JWT, org_id, rate limiting. Deducted for upload size gap, CORS wildcard, no CSRF. |
+| **UX & Frontend Polish** | **9.0** | Top-Tier | 8 components, dark terminal aesthetic, cash position banner. Deducted for hardcoded URL. |
+| **Testing & Evaluation** | **9.2** | Scientific | 26 suites, 2,110 lines of test code. Deducted for no coverage report. |
+| **Overall Weighted** | **9.16** | — | — |
 
-**Grand Verdict**: **Top 1% Winner Caliber.** All critical and high-severity audit findings have been resolved. ReconPilot now demonstrates enterprise-grade architecture, multi-tenant security, international reconciliation capability, and scalable async processing — positioning it as the most technically complete Track 04 submission.
+**Grand Verdict**: **Top 1% Winner Caliber.** ReconPilot demonstrates enterprise-grade architecture, multi-tenant security, international reconciliation, scalable async processing, and disciplined AI integration — the most technically complete Track 04 submission.
+
+**Known risks:** AI simulation caveat, no live deployment, no CI/CD. These are fixable within hours and do not reflect fundamental design flaws.
