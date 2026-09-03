@@ -83,6 +83,9 @@ class SchemaMapper:
         sample_rows: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, str]:
         """Calls LLM to infer mapping for ambiguous/unknown columns."""
+        if os.getenv("RECONPILOT_AI_MODE") == "offline":
+            return {}
+
         system_prompt = (
             "You are a financial data schema mapper. Given a list of CSV column names from a merchant's financial file "
             "and optional sample data, map each input column to its matching canonical column from the allowed target list.\n"
