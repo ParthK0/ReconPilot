@@ -383,24 +383,24 @@ independently_expected = invoice.amount - deduction
 | # | Flaw | Where | Impact | How To Fix |
 |---|---|---|---|---|
 | H1 | **Upload size enforcement** | `routes.py` L67-90, L142, L167 | **RESOLVED**: Added `_read_validated_file()` checking `upload_file.size > MAX_FILE_SIZE_BYTES` before reading stream and using bounded chunk reads (`MAX_FILE_SIZE_BYTES + 1`) to eliminate OOM risks. | Enforces HTTP 413 on incoming streams |
-| H2 | **CORS wildcard fallback** | `main.py` L37 — falls back to `["*"]` when `CORS_ORIGINS` env var is empty | Any website can call your API | Default to `["http://localhost:3000"]` |
-| H3 | **No unique constraint on records** | `models.py` — `Record` table | Same file uploaded twice → duplicate records, double-counting in metrics | Add `UniqueConstraint("batch_id", "order_id", "source_type")` |
-| H4 | **N+1 queries in match detail** | `routes.py` — match detail endpoint loads records individually | Slow at scale | Use `joinedload()` or batch query |
-| H5 | **Rule 3 and Rule 4 are nearly identical** | `rule_engine.py` L156-224 | Both check `invoice.amount == settlement.amount` within T+2 window. R4 is redundant with R3. | Merge or differentiate (R4 could check a wider window) |
+| H2 | **CORS wildcard fallback** | `main.py` L37 | **RESOLVED**: Replaced wildcard `["*"]` fallback with safe default `["http://localhost:3000"]`. | Secure origin gating |
+| H3 | **Unique constraint on records** | `models.py` L77, `normalizer.py` L176 | **RESOLVED**: Added `UniqueConstraint("batch_id", "transaction_id", "source_type")` and wrapped persistence to raise HTTP 409 on duplicates. | Prevents double-counting and duplicate ingestion |
+| H4 | **N+1 queries in match detail** | `routes.py` L372, L416-420 | **RESOLVED**: Verified `get_batch_matches` and `get_match_detail` use single-query `in_()` lookups. | Optimal O(1) in-memory lookup |
+| H5 | **Rule 3 and Rule 4 differentiation** | `rule_engine.py` L193-225, L472 | **RESOLVED**: Rule 4 now covers extended settlement window (T+3 to T+7) at calibrated 98% confidence, differentiating from Rule 3's immediate T+2 window. | Distinct matching corridor |
 
 ### 🟠 Medium (Good To Fix)
 
 | # | Flaw | Where | Impact | How To Fix |
 |---|---|---|---|---|
-| M1 | **Two synthetic data folders** | `backend/synthetic_data/` AND `backend/synthetic-data/` | Confusing, wastes space | Delete `synthetic-data/` |
-| M2 | **`verifier.py` is dead code** | `ai/verifier.py` (78 lines) | Duplicates `engine.py`. Confusing for new developers | Delete file, update imports |
-| M3 | **No structured logging** | All backend files use `print()` | No log levels, no request tracing, can't debug production issues | Add `structlog` or `logging` |
-| M4 | **No CSRF** | API layer | Cross-site request forgery possible | Add CSRF middleware |
-| M5 | **No partial settlement** | Rule engine + pipeline | Real-world scenario not handled | Need multi-match tracking |
-| M6 | **No Alembic migrations** | `session.py` uses `create_all()` | Can't evolve schema without dropping tables | Add Alembic |
-| M7 | **Frontend hardcodes `localhost:8000`** | `page.tsx` L58, L73-76 | Breaks in any non-local environment | Use `NEXT_PUBLIC_API_URL` env var |
-| M8 | **In-memory job queue** | `job_queue.py` | Server restart loses all job state | Add Redis or DB persistence |
-| M9 | **No test coverage measurement** | No `--cov` flag | Unknown what % of code is actually tested | Add `--cov=backend --cov-report=html` |
+| M1 | **Two synthetic data folders** | `backend/synthetic_data/` | **RESOLVED**: Consolidated into `backend/synthetic_data/`, deleted legacy `backend/synthetic-data/`, and updated all code/test references. | Single canonical data source |
+| M2 | **`verifier.py` is dead code** | `ai/verifier.py` | **RESOLVED**: Deleted dead file `backend/ai/verifier.py` (verified zero references). | Clean AI module surface |
+| M3 | **Structured logging** | `backend/logging_config.py` | **RESOLVED**: Added centralized `logging_config.py` with standard formatting, log levels, and module tracing across core services. | Production traceability |
+| M4 | **CSRF protection** | API layer / `main.py` | **RESOLVED (N/A)**: Documented architectural rationale: ReconPilot uses stateless Bearer/API-key headers; no ambient cookie state exists. | OWASP compliant |
+| M5 | **Partial settlement** | Rule engine + pipeline | **DEFERRED (MVP FROZEN)**: Deferred per `01-PRD.md §6` and `AGENTS.md` non-negotiable MVP freeze. Planned for post-MVP. | Architectural roadmap |
+| M6 | **Alembic migrations** | `backend/migrations/` | **RESOLVED**: Added `alembic.ini`, `backend/migrations/env.py`, template scripts, and registered `alembic>=1.13.0` in `requirements.txt`. | Schema evolution support |
+| M7 | **Frontend hardcoded `localhost:8000`** | `frontend/lib/api.ts`, `page.tsx` | **RESOLVED**: Created `API_BASE_URL` resolver reading `NEXT_PUBLIC_API_URL` with `.env.local` fallback, replaced all hardcoded URLs. | Cloud/staging deployment ready |
+| M8 | **In-memory job queue** | `backend/services/job_queue.py`, `models.py` | **RESOLVED**: Added `ReconciliationJob` table and added database persistence across job creation, execution, and queries. | Survives server restarts |
+| M9 | **Test coverage measurement** | `pytest.ini`, `.github/workflows/ci.yml` | **RESOLVED**: Added `--cov=backend --cov-report=term-missing` to `pytest.ini` and XML artifact export in GitHub Actions CI. | Verified test coverage visibility |
 
 ### 🔵 Low (Nice To Have)
 

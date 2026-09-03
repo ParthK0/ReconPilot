@@ -1267,7 +1267,7 @@ def save_ground_truth(data: List[Dict[str, Any]], json_path: str, csv_path: str)
 
 
 def generate_synthetic_data(
-    output_dir: str = "backend/synthetic-data",
+    output_dir: str = "backend/synthetic_data",
     merchant_type: str = "retail",
     total_count: int = 100,
 ) -> Dict[str, str]:
@@ -1304,7 +1304,7 @@ def generate_synthetic_data(
 
 
 def generate_multi_merchant_dataset(
-    base_dir: str = "backend/synthetic-data/merchants",
+    base_dir: str = "backend/synthetic_data/merchants",
     records_per_merchant: int = 100,
 ) -> Dict[str, Dict[str, str]]:
     """

@@ -11,6 +11,7 @@ import {
   ArrowRight,
   Shield,
 } from "lucide-react";
+import { API_BASE_URL } from "../lib/api";
 
 interface UploadPanelProps {
   onUploadSuccess: (batchId: string) => void;
@@ -54,7 +55,7 @@ export function UploadPanel({ onUploadSuccess, merchants }: UploadPanelProps) {
     }
 
     try {
-      const response = await fetch(`http://localhost:8000/api/v1/batches?merchant_type=${merchantType}`, {
+      const response = await fetch(`${API_BASE_URL}/api/v1/batches?merchant_type=${merchantType}`, {
         method: "POST",
         body: formData,
       });

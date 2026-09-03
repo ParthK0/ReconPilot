@@ -36,7 +36,7 @@ from backend.ai.engine import (
     AIVerificationResult,
 )
 
-SYNTHETIC_DATA_DIR = "backend/synthetic-data"
+SYNTHETIC_DATA_DIR = "backend/synthetic_data"
 BENCHMARK_RESULTS_DIR = "tests/benchmark_results"
 
 

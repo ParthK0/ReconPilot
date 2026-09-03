@@ -17,7 +17,11 @@ from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field
 
 from backend.db.session import SessionLocal
+from backend.db.models import ReconciliationJob
 from backend.services.pipeline import process_reconciliation_batch
+from backend.logging_config import get_logger
+
+logger = get_logger("job_queue")
 
 
 class JobProgress(BaseModel):
@@ -62,6 +66,25 @@ class JobQueueManager:
         with self._lock:
             self._jobs[job_id] = job
 
+        # Persist initial job record to database
+        db = SessionLocal()
+        try:
+            db_job = ReconciliationJob(
+                id=job_id,
+                org_id=org_id,
+                batch_id=batch_id,
+                status="queued",
+                stage="queued",
+                progress=Decimal("0.00"),
+            )
+            db.add(db_job)
+            db.commit()
+            logger.info("Queued reconciliation job '%s' for batch '%s' (org: %s).", job_id, batch_id, org_id)
+        except Exception as e:
+            logger.warning("Failed to persist initial job to DB: %s", e)
+        finally:
+            db.close()
+
         self._executor.submit(
             self._run_job,
             job_id=job_id,
@@ -79,6 +102,30 @@ class JobQueueManager:
                 for k, v in kwargs.items():
                     setattr(job, k, v)
                 job.updated_at = datetime.now(timezone.utc)
+
+        # Sync update to database
+        db = SessionLocal()
+        try:
+            db_job = db.query(ReconciliationJob).filter(ReconciliationJob.id == job_id).first()
+            if db_job:
+                if "status" in kwargs:
+                    db_job.status = kwargs["status"]
+                if "stage" in kwargs:
+                    db_job.stage = kwargs["stage"]
+                if "progress" in kwargs:
+                    db_job.progress = Decimal(str(kwargs["progress"]))
+                if "completed_at" in kwargs:
+                    db_job.completed_at = kwargs["completed_at"]
+                if "result" in kwargs:
+                    db_job.result_payload = kwargs["result"]
+                if "error" in kwargs:
+                    db_job.error_message = kwargs["error"]
+                db_job.updated_at = datetime.now(timezone.utc)
+                db.commit()
+        except Exception as e:
+            logger.warning("Failed to sync job '%s' update to DB: %s", job_id, e)
+        finally:
+            db.close()
 
     def _run_job(
         self,
@@ -121,6 +168,7 @@ class JobQueueManager:
                 completed_at=datetime.now(timezone.utc),
                 result=result_summary,
             )
+            logger.info("Reconciliation job '%s' completed successfully.", job_id)
         except Exception as exc:
             self._update_job(
                 job_id,
@@ -129,14 +177,70 @@ class JobQueueManager:
                 error=str(exc),
                 completed_at=datetime.now(timezone.utc),
             )
+            logger.error("Reconciliation job '%s' failed: %s", job_id, exc)
         finally:
             db.close()
 
     def get_job(self, job_id: str) -> Optional[JobProgress]:
         with self._lock:
-            return self._jobs.get(job_id)
+            if job_id in self._jobs:
+                return self._jobs[job_id]
+
+        db = SessionLocal()
+        try:
+            db_job = db.query(ReconciliationJob).filter(ReconciliationJob.id == job_id).first()
+            if db_job:
+                progress = JobProgress(
+                    job_id=db_job.id,
+                    org_id=db_job.org_id,
+                    batch_id=db_job.batch_id,
+                    status=db_job.status,
+                    stage=db_job.stage,
+                    progress=float(db_job.progress),
+                    created_at=db_job.created_at,
+                    updated_at=db_job.updated_at,
+                    completed_at=db_job.completed_at,
+                    result=db_job.result_payload,
+                    error=db_job.error_message,
+                )
+                with self._lock:
+                    self._jobs[job_id] = progress
+                return progress
+        except Exception:
+            pass
+        finally:
+            db.close()
+        return None
 
     def list_jobs(self, org_id: Optional[str] = None) -> List[JobProgress]:
+        db = SessionLocal()
+        try:
+            query = db.query(ReconciliationJob)
+            if org_id:
+                query = query.filter(ReconciliationJob.org_id == org_id)
+            db_jobs = query.order_by(ReconciliationJob.created_at.desc()).all()
+            if db_jobs:
+                return [
+                    JobProgress(
+                        job_id=j.id,
+                        org_id=j.org_id,
+                        batch_id=j.batch_id,
+                        status=j.status,
+                        stage=j.stage,
+                        progress=float(j.progress),
+                        created_at=j.created_at,
+                        updated_at=j.updated_at,
+                        completed_at=j.completed_at,
+                        result=j.result_payload,
+                        error=j.error_message,
+                    )
+                    for j in db_jobs
+                ]
+        except Exception:
+            pass
+        finally:
+            db.close()
+
         with self._lock:
             jobs = list(self._jobs.values())
             if org_id:

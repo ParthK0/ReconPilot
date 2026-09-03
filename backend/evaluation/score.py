@@ -111,7 +111,7 @@ class EvaluationScoreResult(BaseModel):
 
 
 def run_evaluation(
-    data_dir: str = "backend/synthetic-data",
+    data_dir: str = "backend/synthetic_data",
     output_json_path: Optional[str] = "backend/evaluation/evaluation_results.json",
     manual_min_per_record: float = 3.0,
     db_session: Optional[Any] = None,
@@ -121,11 +121,7 @@ def run_evaluation(
     """
     # 1. Resolve synthetic data paths
     if not os.path.exists(data_dir):
-        alt_dir = "backend/synthetic_data"
-        if os.path.exists(alt_dir):
-            data_dir = alt_dir
-        else:
-            raise FileNotFoundError(f"Synthetic data directory not found at '{data_dir}' or '{alt_dir}'.")
+        raise FileNotFoundError(f"Synthetic data directory not found at '{data_dir}'.")
 
     settle_path = os.path.join(data_dir, "settlements.csv")
     bank_path = os.path.join(data_dir, "bank_statements.csv")
@@ -502,7 +498,7 @@ def main():
     parser.add_argument(
         "--data-dir",
         type=str,
-        default="backend/synthetic-data",
+        default="backend/synthetic_data",
         help="Path to synthetic data directory containing CSVs and ground_truth.json",
     )
     parser.add_argument(

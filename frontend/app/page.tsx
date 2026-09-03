@@ -21,6 +21,7 @@ import { MatchTable, MatchItem } from "../components/MatchTable";
 import { ExceptionGrid, ExceptionItem } from "../components/ExceptionGrid";
 import { EvidenceDrawer, MatchDetail } from "../components/EvidenceDrawer";
 import { ReviewModal } from "../components/ReviewModal";
+import { API_BASE_URL } from "../lib/api";
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<"dashboard" | "upload" | "matches" | "exceptions">("dashboard");
@@ -55,7 +56,7 @@ export default function Home() {
 
   // 1. Fetch available merchant profiles
   useEffect(() => {
-    fetch("http://localhost:8000/api/v1/merchants")
+    fetch(`${API_BASE_URL}/api/v1/merchants`)
       .then((res) => res.json())
       .then((data) => {
         if (data && data.merchants) {
@@ -70,10 +71,10 @@ export default function Home() {
     try {
       setIsLoadingMatches(true);
       const [statusRes, matchesRes, cashRes, excRes] = await Promise.all([
-        fetch(`http://localhost:8000/api/v1/batches/${batchId}`),
-        fetch(`http://localhost:8000/api/v1/batches/${batchId}/matches?limit=100`),
-        fetch(`http://localhost:8000/api/v1/batches/${batchId}/cash-position`),
-        fetch(`http://localhost:8000/api/v1/batches/${batchId}/exceptions`),
+        fetch(`${API_BASE_URL}/api/v1/batches/${batchId}`),
+        fetch(`${API_BASE_URL}/api/v1/batches/${batchId}/matches?limit=100`),
+        fetch(`${API_BASE_URL}/api/v1/batches/${batchId}/cash-position`),
+        fetch(`${API_BASE_URL}/api/v1/batches/${batchId}/exceptions`),
       ]);
 
       if (statusRes.ok) {
@@ -116,7 +117,7 @@ export default function Home() {
   const handleGenerateBatch = async () => {
     setIsGenerating(true);
     try {
-      const res = await fetch(`http://localhost:8000/api/v1/batches/generate?merchant_type=${selectedMerchant}&record_count=100`, {
+      const res = await fetch(`${API_BASE_URL}/api/v1/batches/generate?merchant_type=${selectedMerchant}&record_count=100`, {
         method: "POST",
       });
       if (res.ok) {
@@ -142,7 +143,7 @@ export default function Home() {
     setSelectedMatchId(matchId);
     setIsLoadingDetail(true);
     try {
-      const res = await fetch(`http://localhost:8000/api/v1/matches/${matchId}`);
+      const res = await fetch(`${API_BASE_URL}/api/v1/matches/${matchId}`);
       if (res.ok) {
         const data = await res.json();
         setMatchDetail(data);
@@ -163,7 +164,7 @@ export default function Home() {
   ) => {
     if (!currentBatchId) return;
     try {
-      await fetch(`http://localhost:8000/api/v1/matches/${exceptionId}/review`, {
+      await fetch(`${API_BASE_URL}/api/v1/matches/${exceptionId}/review`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -181,7 +182,7 @@ export default function Home() {
 
   const handleExportCsv = () => {
     if (!currentBatchId) return;
-    window.open(`http://localhost:8000/api/v1/batches/${currentBatchId}/export/csv`, "_blank");
+    window.open(`${API_BASE_URL}/api/v1/batches/${currentBatchId}/export/csv`, "_blank");
   };
 
   return (

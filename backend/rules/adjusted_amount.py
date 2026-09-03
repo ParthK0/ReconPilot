@@ -52,7 +52,7 @@ def explain_fixed_schedule_deduction(
     """Explain a mismatch when it follows the configured rate card (or standard default).
 
     The expected values are rounded to paisa before comparison, matching the
-    synthetic-data generator. GST is calculated as a % of MDR fees, allowing
+    synthetic_data generator. GST is calculated as a % of MDR fees, allowing
     records that contain only the applicable charges.
     """
     cfg = load_fee_config(fee_config) if fee_config is not None else DEFAULT_FEE_CONFIG

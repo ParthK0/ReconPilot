@@ -30,6 +30,9 @@ from backend.rules import (
 )
 from backend.ai.engine import verify_discrepancy, verify_discrepancies_clustered
 from backend.services.metrics import compute_batch_metrics
+from backend.logging_config import get_logger
+
+logger = get_logger("pipeline")
 
 
 def _to_normalized_record(r: Record) -> NormalizedRecord:
@@ -92,6 +95,7 @@ def process_reconciliation_batch(
 
     # Load all normalized records for this batch in a single query
     records = db.query(Record).filter(Record.batch_id == batch_id).all()
+    logger.info("Starting reconciliation pipeline for batch '%s' with %d records.", batch_id, len(records))
     invoices_db = [r for r in records if r.source_type == "invoice"]
     settlements_db = [r for r in records if r.source_type == "settlement"]
     banks_db = [r for r in records if r.source_type == "bank"]
@@ -373,4 +377,13 @@ def process_reconciliation_batch(
     batch.status = "done"
     db.commit()
     db.refresh(snapshot)
+    logger.info(
+        "Batch '%s' reconciliation complete in %.2fs: %d rule matches, %d AI verified, %d exceptions (match rate: %.2f%%).",
+        batch_id,
+        processing_time,
+        metrics.rule_matches_count,
+        metrics.ai_verified_count,
+        metrics.exceptions_count,
+        float(metrics.match_rate),
+    )
     return snapshot

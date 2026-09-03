@@ -12,7 +12,7 @@ def test_evaluation_score_runs_and_produces_valid_metrics(tmp_path):
     output_json = tmp_path / "test_evaluation_results.json"
     
     result = run_evaluation(
-        data_dir="backend/synthetic-data",
+        data_dir="backend/synthetic_data",
         output_json_path=str(output_json),
         manual_min_per_record=3.0,
     )

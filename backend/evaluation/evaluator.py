@@ -114,7 +114,7 @@ def calculate_metrics(
 
 
 def evaluate_cross_merchant(
-    base_dir: str = "backend/synthetic-data/merchants",
+    base_dir: str = "backend/synthetic_data/merchants",
 ) -> CrossMerchantEvaluationResult:
     """
     Evaluates the entire schema-agnostic ReconPilot pipeline across all merchant profiles:

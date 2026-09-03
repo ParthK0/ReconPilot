@@ -18,7 +18,7 @@ from backend.ai.engine import (
 )
 from backend.ai.validator import FinanceVerificationResponse
 
-SYNTHETIC_DATA_DIR = "backend/synthetic-data"
+SYNTHETIC_DATA_DIR = "backend/synthetic_data"
 
 
 @pytest.fixture(scope="module")

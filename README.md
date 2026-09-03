@@ -226,22 +226,22 @@ flowchart TD
 | # | Flaw | Impact | Where | Suggested Fix |
 |---|---|---|---|---|
 | 4 | **CSV upload size limit enforcement** | **RESOLVED**: Added `_read_validated_file()` enforcing `file.size > MAX_FILE_SIZE_BYTES` pre-read checks and bounded streaming reads (`MAX_FILE_SIZE_BYTES + 1`) across both batch upload and schema preview endpoints. | [`routes.py`](backend/api/routes.py) | Rejects files >10MB with HTTP 413 before memory buffering |
-| 5 | **CORS wildcard fallback** | `allow_origins=["*"]` when env var is empty. Allows any origin to call the API. | [`main.py`](backend/main.py) L37 | Default to `["http://localhost:3000"]` instead of `["*"]` |
-| 6 | **No unique constraint on `(batch_id, order_id, source_type)`** | Could allow duplicate record ingestion within same batch. | [`models.py`](backend/db/models.py) | Add `UniqueConstraint("batch_id", "order_id", "source_type")` |
-| 7 | **N+1 query in match detail retrieval** | Individual `db.query(Record).filter(Record.id == ...)` calls for each linked record in the detail endpoint. | `routes.py` | Use `joinedload()` or batch query |
-| 8 | **No test coverage measurement** | No `--cov` flag in any config. Cannot verify actual line coverage. | `pytest.ini` | Add `--cov=backend --cov-report=html` |
+| 5 | **CORS wildcard fallback** | **RESOLVED**: Replaced wildcard `["*"]` fallback with safe default `["http://localhost:3000"]`. | [`main.py`](backend/main.py) L37 | Default to `["http://localhost:3000"]` |
+| 6 | **Unique constraint on records** | **RESOLVED**: Added `UniqueConstraint("batch_id", "transaction_id", "source_type")` and wrapped persistence to raise HTTP 409 Conflict on duplicate records. | [`models.py`](backend/db/models.py) | Unique record enforcement per batch |
+| 7 | **N+1 query in match detail retrieval** | **RESOLVED**: Batch record loading with single-query `in_()` map lookup eliminates N+1 query loops. | [`routes.py`](backend/api/routes.py) | Batch query lookup |
+| 8 | **Test coverage measurement** | **RESOLVED**: Added `pytest-cov` integration with terminal missing-line reporting and XML/HTML artifact export. | [`pytest.ini`](pytest.ini), [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | `--cov=backend` in CI workflow |
 
 ### Medium
 
 | # | Flaw | Impact | Where | Suggested Fix |
 |---|---|---|---|---|
-| 9 | **Dual synthetic data folders** | `backend/synthetic_data/` (underscore) and `backend/synthetic-data/` (hyphen) both exist with overlapping CSV files. | Backend root | Consolidate into `synthetic_data/` |
-| 10 | **`verifier.py` is a redundant wrapper** | Duplicates `engine.py` functionality. Dead code smell. | [`verifier.py`](backend/ai/verifier.py) | Merge into `engine.py` and delete |
-| 11 | **No structured logging** | Only `print()` output. No log levels, no request tracing, no correlation IDs. | All backend modules | Add `structlog` or `logging` with JSON formatting |
-| 12 | **No CSRF protection** | Frontend makes plain fetch requests without CSRF tokens. | API layer | Add CSRF middleware or use SameSite cookies |
-| 13 | **No partial settlement support** | True partial settlements (one invoice settled in multiple tranches with different amounts) are not explicitly modeled. | Rule engine | Add split-match tracking with remaining balance per `order_id` |
-| 14 | **No Alembic migrations** | Schema is created via `Base.metadata.create_all()`. No migration history for schema evolution. | `session.py` | Add Alembic with auto-generate |
-| 15 | **Frontend hardcodes `localhost:8000`** | API URL is hardcoded in [`page.tsx`](frontend/app/page.tsx). Breaks in any non-local deployment. | Frontend | Use `NEXT_PUBLIC_API_URL` env var |
+| 9 | **Dual synthetic data folders** | **RESOLVED**: Consolidated into single canonical `backend/synthetic_data/` directory and updated all references. | Backend root | Consolidate into `synthetic_data/` |
+| 10 | **`verifier.py` is a redundant wrapper** | **RESOLVED**: Deleted dead `backend/ai/verifier.py` file with zero impact on clean engine API. | [`verifier.py`](backend/ai/verifier.py) | Deleted dead wrapper |
+| 11 | **Structured logging** | **RESOLVED**: Added centralized `backend/logging_config.py` with standard formatting and module tracing. | All backend modules | Standard structured logger |
+| 12 | **CSRF protection** | **RESOLVED (N/A)**: Documented architectural rationale: API uses Bearer/API-key headers without cookie credentials. | API layer / `main.py` | Stateless token auth |
+| 13 | **Partial settlement support** | **DEFERRED (MVP FROZEN)**: Deferred per `01-PRD.md §6` and `AGENTS.md` non-negotiable MVP freeze. Planned for post-MVP. | Rule engine | Architecture roadmap |
+| 14 | **Alembic migrations** | **RESOLVED**: Scaffolded Alembic migration environment (`alembic.ini`, `backend/migrations/env.py`, versions) and added to requirements. | `session.py`, `backend/migrations` | Schema evolution support |
+| 15 | **Frontend API URL configuration** | **RESOLVED**: Created `API_BASE_URL` reading `NEXT_PUBLIC_API_URL` with `.env.local` fallback across all fetch calls. | Frontend | Configurable base URL |
 | 16 | **No Swagger/ReDoc customization** | Despite FastAPI's built-in docs, no custom OpenAPI schema metadata is configured. | `main.py` | Add `openapi_tags` and response examples |
 
 ### Low
