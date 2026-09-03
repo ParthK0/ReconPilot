@@ -78,8 +78,10 @@ def test_csv_formula_injection_sanitized():
     assert df["customer_name"].iloc[0].startswith("'@")
 
 
-def test_upload_payload_size_limit(client: TestClient):
+def test_upload_payload_size_limit(monkeypatch, client: TestClient):
     """Uploading a file exceeding 10MB must return HTTP 413 Payload Too Large."""
+    monkeypatch.setenv("DEMO_API_KEY", "")
+    monkeypatch.setenv("RECONPILOT_API_KEY", "")
     huge_bytes = b"0" * (11 * 1024 * 1024)  # 11 MB
 
     files = {
@@ -89,5 +91,17 @@ def test_upload_payload_size_limit(client: TestClient):
     }
 
     res = client.post("/api/v1/batches", files=files)
+    assert res.status_code == 413
+    assert "exceeds maximum limit" in res.json()["detail"]
+
+
+def test_preview_schema_size_limit(monkeypatch, client: TestClient):
+    """Uploading a schema file exceeding 10MB must return HTTP 413 Payload Too Large."""
+    monkeypatch.setenv("DEMO_API_KEY", "")
+    monkeypatch.setenv("RECONPILOT_API_KEY", "")
+    huge_bytes = b"0" * (11 * 1024 * 1024)
+
+    files = {"file": ("huge_settlement.csv", huge_bytes, "text/csv")}
+    res = client.post("/api/v1/schema/preview", files=files)
     assert res.status_code == 413
     assert "exceeds maximum limit" in res.json()["detail"]

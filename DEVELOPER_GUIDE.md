@@ -374,15 +374,15 @@ independently_expected = invoice.amount - deduction
 
 | # | Flaw | Where | Impact | How To Fix |
 |---|---|---|---|---|
-| C1 | **AI benchmark uses simulation, not real LLM** | `engine.py` L132-227 `_simulate_llm_reasoning()` | The 100% AI accuracy is fake — it's a hardcoded function that pattern-matches settlement fields to produce "correct" output. It essentially encodes the ground truth. | Set `RECONPILOT_AI_MODE=live`, configure `GEMINI_API_KEY`, run benchmark, record results |
-| C2 | **No CI/CD** | Missing `.github/workflows/` | Tests never run automatically. A breaking change can be pushed without anyone knowing. | Add GitHub Actions workflow |
+| C1 | **AI benchmark live verification** | `engine.py` / `tests/test_ai_live_benchmark.py` | **RESOLVED**: Added dedicated `test_ai_live_benchmark.py` running in strict `disable_simulation_fallback=True` mode, asserting `is_simulated == False` with token/cost tracking and audit persistence to `tests/benchmark_results/live_llm_benchmark.json`. | Run `pytest tests/test_ai_live_benchmark.py -m live_llm -v -s` with valid `GEMINI_API_KEY` or `OPENAI_API_KEY` |
+| C2 | **CI/CD Pipeline** | `.github/workflows/ci.yml` | **RESOLVED**: Automated GitHub Actions CI pipeline running backend tests with coverage (`pytest-cov`), Next.js frontend production build, and dual Docker container validation. | Runs automatically on push/PR to main/master |
 | C3 | **No live deployment** | — | Can't show a running demo | Deploy backend to Railway/Render, frontend to Vercel |
 
 ### 🟡 High (Should Fix)
 
 | # | Flaw | Where | Impact | How To Fix |
 |---|---|---|---|---|
-| H1 | **Upload size never enforced** | `routes.py` L67 — `MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024` declared but never used | A 2GB CSV will be read into memory → OOM crash | Add `if file.size > MAX_FILE_SIZE_BYTES` check before reading |
+| H1 | **Upload size enforcement** | `routes.py` L67-90, L142, L167 | **RESOLVED**: Added `_read_validated_file()` checking `upload_file.size > MAX_FILE_SIZE_BYTES` before reading stream and using bounded chunk reads (`MAX_FILE_SIZE_BYTES + 1`) to eliminate OOM risks. | Enforces HTTP 413 on incoming streams |
 | H2 | **CORS wildcard fallback** | `main.py` L37 — falls back to `["*"]` when `CORS_ORIGINS` env var is empty | Any website can call your API | Default to `["http://localhost:3000"]` |
 | H3 | **No unique constraint on records** | `models.py` — `Record` table | Same file uploaded twice → duplicate records, double-counting in metrics | Add `UniqueConstraint("batch_id", "order_id", "source_type")` |
 | H4 | **N+1 queries in match detail** | `routes.py` — match detail endpoint loads records individually | Slow at scale | Use `joinedload()` or batch query |

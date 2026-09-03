@@ -368,8 +368,16 @@ def match_fx_spread_tolerance(
     Assigns 94% confidence.
     """
     if invoice and settlement:
+        is_cross_border = (
+            getattr(invoice, "currency", "INR") != "INR"
+            or getattr(settlement, "currency", "INR") != "INR"
+            or "intl" in (invoice.order_id or "").lower()
+            or "fx" in (invoice.order_id or "").lower()
+            or "cross_border" in (invoice.order_id or "").lower()
+        )
         if (
-            invoice.order_id
+            is_cross_border
+            and invoice.order_id
             and settlement.order_id
             and invoice.order_id.strip() == settlement.order_id.strip()
             and invoice.amount > Decimal("0.00")

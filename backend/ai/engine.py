@@ -68,6 +68,7 @@ class AIVerificationResult(BaseModel):
     raw_response: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
     cost_ceiling_breached: bool = False
+    is_simulated: bool = False
 
 
 def assemble_context_payload(
@@ -310,7 +311,9 @@ class FinanceVerificationOrchestrator:
         gemini_api_key: Optional[str] = None,
         ai_mode: Optional[str] = None,
         spend_ceiling_usd: Optional[Decimal] = None,
+        disable_simulation_fallback: bool = False,
     ):
+        self.disable_simulation_fallback = disable_simulation_fallback
         self.llm_client = LLMClient(
             openai_api_key=openai_api_key,
             gemini_api_key=gemini_api_key,
@@ -327,14 +330,17 @@ class FinanceVerificationOrchestrator:
         settlement: Optional[NormalizedRecord],
         bank: Optional[NormalizedRecord],
         numeric_delta: Decimal,
-    ) -> Tuple[Dict[str, Any], int, int, str, Decimal]:
+    ) -> Tuple[Dict[str, Any], int, int, str, Decimal, bool]:
         """
         Executes LLM call with failure handling and fallback.
         """
+        fallback_fn = None if self.disable_simulation_fallback else (
+            lambda: _simulate_llm_reasoning(invoice, settlement, bank, numeric_delta)
+        )
         llm_res: LLMResponse = self.llm_client.generate_json_completion(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            fallback_simulation_fn=lambda: _simulate_llm_reasoning(invoice, settlement, bank, numeric_delta),
+            fallback_simulation_fn=fallback_fn,
         )
         return (
             llm_res.parsed_json,
@@ -342,6 +348,7 @@ class FinanceVerificationOrchestrator:
             llm_res.completion_tokens,
             llm_res.model_name,
             llm_res.estimated_cost_usd,
+            llm_res.is_simulated,
         )
 
     def verify_discrepancy(
@@ -385,6 +392,7 @@ class FinanceVerificationOrchestrator:
 
         # Step 3: Check budget & Execute LLM Call
         cost_breached = False
+        is_simulated = False
         try:
             llm_out = self._execute_llm_call_with_retry(
                 sys_prompt, user_prompt, invoice, settlement, bank, numeric_delta
@@ -394,9 +402,11 @@ class FinanceVerificationOrchestrator:
             c_tokens = llm_out[2]
             model_used = llm_out[3]
             est_cost = llm_out[4] if len(llm_out) > 4 else Decimal("0.000000")
+            is_simulated = llm_out[5] if len(llm_out) > 5 else False
             latency_ms = int((time.time() - start_time) * 1000)
         except CostCeilingExceededError as cce:
             cost_breached = True
+            is_simulated = True
             raw_response = {
                 "difference_amount": float(numeric_delta),
                 "likely_reason": "insufficient_evidence",
@@ -492,6 +502,7 @@ class FinanceVerificationOrchestrator:
             raw_response=raw_response,
             notes=val_res.notes,
             cost_ceiling_breached=cost_breached,
+            is_simulated=is_simulated,
         )
 
         # Step 6: Log to database if session and match_id provided
@@ -611,6 +622,7 @@ class FinanceVerificationOrchestrator:
                         estimated_cost_usd=Decimal("0.000000"),
                         latency_ms=1,
                         notes=f"Cluster micro-batch member ({cluster_key})",
+                        is_simulated=rep_result.is_simulated,
                     )
                 else:
                     item_result = self.verify_discrepancy(

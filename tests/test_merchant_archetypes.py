@@ -22,6 +22,7 @@ def test_all_10_archetypes_registered():
         "education",
         "logistics",
         "enterprise",
+        "cross_border_saas",
     }
     assert set(MERCHANT_ARCHETYPES.keys()) == expected_types
     for m_type in expected_types:

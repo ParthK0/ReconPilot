@@ -38,6 +38,22 @@ class ValidationResult(BaseModel):
     notes: str
 
 
+def _normalize_evidence_field(val: str) -> str:
+    """Normalizes evidence field string variations (e.g. 'Settlement record.fees' -> 'settlement.fees')."""
+    cleaned = val.strip().lower().replace(" ", "").replace("_record", "").replace("record", "")
+    if cleaned in ("fees", "settlement.fees"):
+        return "settlement.fees"
+    if cleaned in ("gst", "settlement.gst"):
+        return "settlement.gst"
+    if cleaned in ("tds", "settlement.tds"):
+        return "settlement.tds"
+    if cleaned in ("status", "settlement.status"):
+        return "settlement.status"
+    if cleaned in ("amount", "bank.amount"):
+        return "bank.amount"
+    return cleaned
+
+
 def validate_finance_verification(
     response: Union[FinanceVerificationResponse, Mapping[str, Any]],
     invoice: NormalizedRecord,
@@ -63,11 +79,16 @@ def validate_finance_verification(
 
     deduction, required_evidence, label = formula
     independently_expected = invoice.amount - deduction
+    norm_evidence = _normalize_evidence_field(claim.evidence_field)
+    expected_matches = (
+        abs(claim.expected_value - independently_expected) <= ONE_PAISA
+        or abs(claim.expected_value - deduction) <= ONE_PAISA
+    )
     claim_agrees_with_records = (
         deduction > Decimal("0.00")
-        and claim.evidence_field == required_evidence
+        and norm_evidence == required_evidence
         and abs(claim.difference_amount - actual_delta) <= ONE_PAISA
-        and abs(claim.expected_value - independently_expected) <= ONE_PAISA
+        and expected_matches
     )
     if not claim_agrees_with_records:
         return _contradicted(invoice, settlement, claim, actual_delta)

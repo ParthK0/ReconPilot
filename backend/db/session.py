@@ -54,8 +54,22 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def init_db():
-    """Initializes the database schema."""
+    """Initializes the database schema and ensures column migrations on SQLite."""
     Base.metadata.create_all(bind=engine)
+    if DATABASE_URL.startswith("sqlite"):
+        try:
+            from sqlalchemy import inspect, text
+            insp = inspect(engine)
+            for table_name, table in Base.metadata.tables.items():
+                if insp.has_table(table_name):
+                    existing = {c["name"] for c in insp.get_columns(table_name)}
+                    for col in table.columns:
+                        if col.name not in existing:
+                            default_clause = " DEFAULT 'org_default'" if col.name == "org_id" else ""
+                            with engine.begin() as conn:
+                                conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {col.name} VARCHAR(100){default_clause}"))
+        except Exception:
+            pass
 
 
 def get_db() -> Generator[Session, None, None]:

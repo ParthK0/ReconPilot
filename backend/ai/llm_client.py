@@ -156,7 +156,7 @@ class LLMClient:
         system_prompt: str,
         user_prompt: str,
         fallback_simulation_fn: Optional[Any] = None,
-        max_retries: int = 2,
+        max_retries: int = 4,
     ) -> LLMResponse:
         """
         Executes a structured JSON completion with live provider prioritization,
@@ -250,11 +250,17 @@ class LLMClient:
             except json.JSONDecodeError as jde:
                 last_error = jde
                 if attempt < max_retries - 1:
-                    time.sleep(0.5 * (2 ** attempt))
+                    time.sleep(1.0 * (2 ** attempt))
+            except httpx.HTTPStatusError as hse:
+                last_error = hse
+                if hse.response.status_code == 429:
+                    time.sleep(5.0 * (attempt + 1))
+                elif attempt < max_retries - 1:
+                    time.sleep(2.0 * (2 ** attempt))
             except Exception as e:
                 last_error = e
                 if attempt < max_retries - 1:
-                    time.sleep(0.5 * (2 ** attempt))
+                    time.sleep(1.5 * (2 ** attempt))
 
         # If live retries fail, fall back to safe simulation if available
         if fallback_simulation_fn is not None:

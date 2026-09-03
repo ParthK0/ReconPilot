@@ -217,15 +217,15 @@ flowchart TD
 
 | # | Flaw | Impact | Where | Suggested Fix |
 |---|---|---|---|---|
-| 1 | **AI benchmark uses simulation fallback** | The `100% AI accuracy` in benchmarks comes from `_simulate_llm_reasoning()` — a hardcoded deterministic function — not live LLM calls. Cannot verify live accuracy from the repo. | [`engine.py`](backend/ai/engine.py) L150-245 | Record ≥1 live LLM API call with the validator chain end-to-end |
-| 2 | **No CI/CD pipeline** | No automated test execution on push/PR. No deployment automation. | Repo root | Add `.github/workflows/ci.yml` with pytest + coverage |
+| 1 | **AI benchmark live verification** | **RESOLVED**: Added `tests/test_ai_live_benchmark.py` running in strict `disable_simulation_fallback=True` mode, strictly asserting `is_simulated == False`, recording latency/tokens/cost USD, and outputting to `tests/benchmark_results/live_llm_benchmark.json`. | [`tests/test_ai_live_benchmark.py`](tests/test_ai_live_benchmark.py) | Run `pytest tests/test_ai_live_benchmark.py -m live_llm -v -s` |
+| 2 | **CI/CD pipeline** | **RESOLVED**: Automated GitHub Actions workflow at [`.github/workflows/ci.yml`](.github/workflows/ci.yml) running backend test coverage (`pytest-cov`), Next.js frontend production bundle, and Docker validation. | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Runs automatically on push/PR |
 | 3 | **No live deployed URL** | Judges cannot interact with a running instance. Docker support exists but no public deployment. | — | Deploy to Railway/Render + Vercel |
 
 ### High
 
 | # | Flaw | Impact | Where | Suggested Fix |
 |---|---|---|---|---|
-| 4 | **No CSV upload size limit enforcement** | `MAX_FILE_SIZE_BYTES` constant (10MB) is declared in [`routes.py`](backend/api/routes.py) L67 but never enforced on incoming file streams. A 2GB file could OOM the server. | `routes.py` | Add `if file.size > MAX_FILE_SIZE_BYTES: raise HTTPException(413)` |
+| 4 | **CSV upload size limit enforcement** | **RESOLVED**: Added `_read_validated_file()` enforcing `file.size > MAX_FILE_SIZE_BYTES` pre-read checks and bounded streaming reads (`MAX_FILE_SIZE_BYTES + 1`) across both batch upload and schema preview endpoints. | [`routes.py`](backend/api/routes.py) | Rejects files >10MB with HTTP 413 before memory buffering |
 | 5 | **CORS wildcard fallback** | `allow_origins=["*"]` when env var is empty. Allows any origin to call the API. | [`main.py`](backend/main.py) L37 | Default to `["http://localhost:3000"]` instead of `["*"]` |
 | 6 | **No unique constraint on `(batch_id, order_id, source_type)`** | Could allow duplicate record ingestion within same batch. | [`models.py`](backend/db/models.py) | Add `UniqueConstraint("batch_id", "order_id", "source_type")` |
 | 7 | **N+1 query in match detail retrieval** | Individual `db.query(Record).filter(Record.id == ...)` calls for each linked record in the detail endpoint. | `routes.py` | Use `joinedload()` or batch query |

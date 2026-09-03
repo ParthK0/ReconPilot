@@ -7,7 +7,9 @@ from backend.db.session import init_db
 
 
 @pytest.fixture(autouse=True)
-def setup_database():
+def setup_database(monkeypatch):
+    monkeypatch.setenv("DEMO_API_KEY", "")
+    monkeypatch.setenv("RECONPILOT_API_KEY", "")
     init_db()
 
 

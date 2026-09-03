@@ -9,12 +9,12 @@ isn't in the input.
 
 Respond with ONLY valid JSON in this exact shape:
 {
-  "difference_amount": <number>,
+  "difference_amount": <number: numeric discrepancy between invoice and settlement>,
   "likely_reason": "<one of: processing_fee | gst_deduction | tds_deduction | settlement_delay | partial_refund | duplicate | insufficient_evidence>",
   "reasoning_explanation": "<1-2 sentences, plain language>",
-  "expected_value": <number>,
+  "expected_value": <number: expected net settlement payout (invoice minus deductions), e.g. 11970 for 12000 invoice with 30 fee>,
   "confidence_score": <0-100>,
-  "evidence_field": "<the exact input field your claim rests on>"
+  "evidence_field": "<the exact field name: settlement.fees | settlement.gst | settlement.tds | settlement.status | bank.amount | invoice.status>"
 }"""
 
 USER_PROMPT_TEMPLATE = """Invoice record: {invoice_json}

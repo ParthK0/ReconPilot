@@ -66,6 +66,27 @@ from sqlalchemy import text
 
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB per file limit
 
+
+async def _read_validated_file(upload_file: UploadFile, max_size: int = MAX_FILE_SIZE_BYTES) -> bytes:
+    """
+    Safely reads an incoming file stream without risking memory exhaustion (OOM).
+    1. Inspects `upload_file.size` if present before reading any stream bytes.
+    2. Reads in a bounded chunk (max_size + 1) so unchunked/unbounded streams are capped.
+    """
+    if getattr(upload_file, "size", None) is not None and upload_file.size > max_size:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Uploaded file '{upload_file.filename}' exceeds maximum limit of 10 MB per file.",
+        )
+    data = await upload_file.read(max_size + 1)
+    if len(data) > max_size:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Uploaded file '{upload_file.filename}' exceeds maximum limit of 10 MB per file.",
+        )
+    return data
+
+
 router = APIRouter()
 
 
@@ -121,7 +142,7 @@ async def preview_schema(
     - suggest (80-94%)
     - reject (<80%)
     """
-    content = await file.read()
+    content = await _read_validated_file(file)
     try:
         df = pd.read_csv(io.BytesIO(content))
     except Exception as e:
@@ -147,20 +168,17 @@ async def upload_batch(
     POST /batches: Upload 3 CSV files, validate schemas, persist records,
     and trigger automated reconciliation pipeline with intelligent schema detection.
     """
-    settle_bytes = await settlement_csv.read()
-    bank_bytes = await bank_csv.read()
-    inv_bytes = await invoice_csv.read()
+    # Enforce file.size check before loading file streams into memory
+    for f in (settlement_csv, bank_csv, invoice_csv, ground_truth_json):
+        if f is not None and getattr(f, "size", None) is not None and f.size > MAX_FILE_SIZE_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"Uploaded file '{f.filename}' exceeds maximum limit of 10 MB per file.",
+            )
 
-    # Enforce maximum 10 MB file size limit per upload
-    if (
-        len(settle_bytes) > MAX_FILE_SIZE_BYTES
-        or len(bank_bytes) > MAX_FILE_SIZE_BYTES
-        or len(inv_bytes) > MAX_FILE_SIZE_BYTES
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Uploaded file size exceeds maximum limit of 10 MB per file.",
-        )
+    settle_bytes = await _read_validated_file(settlement_csv)
+    bank_bytes = await _read_validated_file(bank_csv)
+    inv_bytes = await _read_validated_file(invoice_csv)
 
     m_type = merchant_type or "retail"
 
@@ -188,9 +206,11 @@ async def upload_batch(
     gt_data = None
     if ground_truth_json is not None:
         try:
-            gt_bytes = await ground_truth_json.read()
+            gt_bytes = await _read_validated_file(ground_truth_json)
             if gt_bytes:
                 gt_data = json.loads(gt_bytes.decode("utf-8"))
+        except HTTPException:
+            raise
         except Exception:
             gt_data = None
 
