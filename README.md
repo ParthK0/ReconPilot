@@ -251,7 +251,7 @@ flowchart TD
 | 17 | **No encoding detection on CSV** | `pd.read_csv()` defaults to UTF-8. No fallback for Latin-1 or Windows-1252 encoded files. | `csv_parser.py` | Add `chardet` detection |
 | 18 | **No headerless CSV support** | Schema mapper requires CSV headers. | `mapper.py` | Add `header=None` heuristic |
 | 19 | **Ambiguous multi-match not scored** | Two invoices with same amount/date but different order IDs could be ambiguously matched. No candidate scoring. | `rule_engine.py` | Add weighted candidate ranking |
-| 20 | **Job queue is in-memory only** | `JobQueueManager` stores jobs in a Python dict. Server restart loses all job state. | `job_queue.py` | Add Redis or DB persistence |
+| 20 | **Job queue is in-memory only** | **RESOLVED**: Added `ReconciliationJob` model and database persistence in `backend/services/job_queue.py`, allowing jobs to survive server restarts. | [`job_queue.py`](backend/services/job_queue.py) | Database-backed job queue |
 
 ---
 
@@ -259,30 +259,32 @@ flowchart TD
 
 ```
 ReconPilot/
-├── backend/                          # Python 3.11+ FastAPI Backend (7,993 lines)
-│   ├── ai/                           # Finance Verification Engine & Validator (1,121 lines)
+├── backend/                          # Python 3.11+ FastAPI Backend (8,000+ lines)
+│   ├── ai/                           # Finance Verification Engine & Validator (1,043 lines)
 │   │   ├── engine.py                 # AI Orchestrator + Cluster Micro-Batching (627 lines)
 │   │   ├── llm_client.py             # Multi-provider LLM Gateway (249 lines)
 │   │   ├── feedback_memory.py        # Historical Precedent Store (146 lines)
 │   │   ├── validator.py              # Deterministic Arithmetic Validator (100 lines)
-│   │   ├── verifier.py               # Legacy wrapper [TO BE MERGED] (78 lines)
 │   │   └── prompts.py                # Strict Prompt Templates (21 lines)
 │   ├── api/                          # FastAPI REST Layer (979 lines)
-│   │   ├── routes.py                 # 16+ Endpoints (719 lines)
+│   │   ├── routes.py                 # 16+ Endpoints (10MB bounded streams, 409 conflict, batch in_())
 │   │   ├── auth.py                   # JWT Auth & Tenant Scoping (137 lines)
 │   │   ├── schemas.py                # Pydantic Schemas (84 lines)
 │   │   └── rate_limiter.py           # Sliding Window Limiter (39 lines)
 │   ├── rules/                        # Deterministic Rule Engine (857 lines)
-│   │   ├── rule_engine.py            # 7-Rule Priority Pipeline (415 lines)
+│   │   ├── rule_engine.py            # 7-Rule Priority Pipeline with R4 T+7 differentiation (415 lines)
 │   │   ├── exception_taxonomy.py     # 30+ Exception Categories (342 lines)
 │   │   └── adjusted_amount.py        # Statutory Fee Validator (100 lines)
-│   ├── services/                     # Pipeline & Job Queue (554 lines)
-│   │   ├── pipeline.py               # Reconciliation Orchestrator (343 lines)
-│   │   ├── job_queue.py              # Async Background Workers (130 lines)
+│   ├── services/                     # Pipeline & Job Queue (600 lines)
+│   │   ├── pipeline.py               # Reconciliation Orchestrator with Structured Logging (385 lines)
+│   │   ├── job_queue.py              # DB-Backed Async Background Workers (185 lines)
 │   │   └── metrics.py                # Metrics Computation (81 lines)
-│   ├── db/                           # Database Layer (217 lines)
-│   │   ├── models.py                 # 7 ORM Models (166 lines)
+│   ├── db/                           # Database Layer (275 lines)
+│   │   ├── models.py                 # 8 ORM Models (incl. ReconciliationJob, UniqueConstraint)
 │   │   └── session.py                # Engine & Sessions (51 lines)
+│   ├── migrations/                   # Alembic Database Migrations
+│   │   ├── versions/                 # Versioned Migration Scripts
+│   │   └── env.py                    # Migration Context
 │   ├── parser/                       # CSV Parsing (272 lines)
 │   ├── normalizer/                   # Data Cleaning & Normalization (335 lines)
 │   ├── schema_mapper/                # AI-Assisted Column Mapping (546 lines)
@@ -290,21 +292,27 @@ ReconPilot/
 │   ├── analytics/                    # Cash Position Engine (126 lines)
 │   ├── reports/                      # ERP Export Generator (267 lines)
 │   ├── evaluation/                   # Benchmark Suite (1,008 lines)
-│   └── synthetic_data/               # Data Generator & Archetypes (1,971 lines)
+│   ├── synthetic_data/               # Canonical Data Generator & Archetypes (1,971 lines)
+│   ├── logging_config.py             # Centralized Structured Logging Configuration
+│   └── main.py                       # FastAPI Entrypoint (Safe CORS, CSRF Note)
 ├── frontend/                         # Next.js 14 + Tailwind CSS + shadcn/ui
 │   ├── app/                          # App Router (page.tsx, layout.tsx, globals.css)
-│   └── components/                   # 8 React Components
-├── tests/                            # 26 Test Suites (2,110 lines)
-├── docs/                             # 7 Specification Documents
-├── Dockerfile                        # Production Container Image
+│   ├── components/                   # 8 React Components
+│   └── lib/                          # API Client Utilities (api.ts with NEXT_PUBLIC_API_URL)
+├── tests/                            # 28 Test Suites (97 passed tests, 78% line coverage)
+│   └── test_ai_live_benchmark.py     # Dedicated Live LLM Ground-Truth Benchmark
+├── .github/workflows/ci.yml          # Automated CI/CD Pipeline (pytest-cov, Next.js, Docker)
+├── alembic.ini                       # Alembic Migration Configuration
+├── pytest.ini                        # Pytest configuration with --cov=backend
+├── Dockerfile                        # Production Multi-Stage Container Image
 ├── docker-compose.yml                # Full-Stack Orchestration
-├── requirements.txt                  # Python Dependencies (14 packages)
+├── requirements.txt                  # Python Dependencies (FastAPI, Alembic, pytest-cov, etc.)
 └── README.md                         # This File
 ```
 
-**Total Backend Python**: ~7,993 lines across 45 files  
-**Total Test Code**: ~2,110 lines across 26 test suites  
-**Total Frontend**: ~366 lines (page.tsx) + 8 component files  
+**Total Backend Python**: ~8,000+ lines across 45 files  
+**Total Test Code**: 28 test suites, 97 passed tests (**78% line coverage**)  
+**Total Frontend**: Next.js 14 App Router + 8 modular React components + configurable API client    
 
 ---
 

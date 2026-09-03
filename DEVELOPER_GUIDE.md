@@ -280,30 +280,31 @@ These populate the KPI cards, match table, evidence drawers, and exception grid.
 
 | File | Lines | What It Actually Does | Why It Exists |
 |---|---|---|---|
-| [`main.py`](file:///e:/Razorpay/backend/main.py) | 47 | Creates FastAPI app, attaches CORS, rate limiter, health endpoint | Entry point |
-| [`db/models.py`](file:///e:/Razorpay/backend/db/models.py) | 166 | Defines 7 ORM tables: `Batch`, `Record`, `Match`, `AIVerification`, `ExceptionRecord`, `MetricsSnapshot`, `FeedbackMemoryRecord` | Database schema |
+| [`main.py`](file:///e:/Razorpay/backend/main.py) | 65 | FastAPI app, safe CORS (`http://localhost:3000`), rate limiter, structured logging, CSRF note | Entry point |
+| [`logging_config.py`](file:///e:/Razorpay/backend/logging_config.py) | 35 | Centralized structured logging with uniform timestamps, levels, and module tracing | Observability |
+| [`db/models.py`](file:///e:/Razorpay/backend/db/models.py) | 225 | Defines 8 ORM tables: `Batch`, `Record`, `Match`, `AIVerification`, `ExceptionRecord`, `MetricsSnapshot`, `FeedbackMemoryRecord`, `ReconciliationJob` (with `UniqueConstraint` on `Record`) | Database schema |
 | [`db/session.py`](file:///e:/Razorpay/backend/db/session.py) | 51 | Creates SQLAlchemy engine (PostgreSQL or SQLite), session factory, `init_db()` | DB connection |
+| [`migrations/`](file:///e:/Razorpay/backend/migrations) | — | Alembic migration framework (`alembic.ini`, `env.py`, versioned migration scripts) | Schema evolution |
 | [`parser/csv_parser.py`](file:///e:/Razorpay/backend/parser/csv_parser.py) | 317 | `InvoiceParser`, `SettlementParser`, `BankStatementParser` + `SmartCSVParser` with schema mapping integration | Read & validate CSV files |
-| [`normalizer/normalizer.py`](file:///e:/Razorpay/backend/normalizer/normalizer.py) | 168 | `NormalizedRecord` model + `normalize_invoice_row()`, `normalize_settlement_row()`, `normalize_bank_row()`, `normalize_dataframe()`, `persist_normalized_records()` | Convert raw CSV into clean typed records |
+| [`normalizer/normalizer.py`](file:///e:/Razorpay/backend/normalizer/normalizer.py) | 175 | `NormalizedRecord` model + `normalize_invoice_row()`, `normalize_settlement_row()`, `normalize_bank_row()`, `normalize_dataframe()`, `persist_normalized_records()` with unique violation catches | Convert raw CSV into clean typed records |
 | [`normalizer/data_cleaners.py`](file:///e:/Razorpay/backend/normalizer/data_cleaners.py) | 189 | `clean_currency()` (strips ₹, commas, handles negatives), `clean_date()` (20+ formats), `clean_reference()` (strips hyphens, uppercases), `clean_order_id()`, `clean_status()` (maps "success"→"paid") | Handle dirty real-world data formats |
 | [`schema_mapper/mapper.py`](file:///e:/Razorpay/backend/schema_mapper/mapper.py) | 306 | 3-phase column mapping: exact → 178 aliases → AI with ≥0.95 gating | Handle non-standard CSV column names |
 | [`schema_mapper/aliases.py`](file:///e:/Razorpay/backend/schema_mapper/aliases.py) | 240 | Dictionary of 178 known column name variants | Alias lookup |
 | [`config/fee_rules.py`](file:///e:/Razorpay/backend/config/fee_rules.py) | 84 | `FeeConfig` Pydantic model (mdr, gst, tds, platform_fee, convenience_fee, settlement_delay_days) + `load_fee_config()` from JSON/dict/string/profile name | Make fee rates configurable per merchant |
-| [`rules/rule_engine.py`](file:///e:/Razorpay/backend/rules/rule_engine.py) | 415 | 7 matching functions + `apply_rules_in_order()` orchestrator + `find_duplicate_order_ids()` | Deterministic matching — the core engine |
+| [`rules/rule_engine.py`](file:///e:/Razorpay/backend/rules/rule_engine.py) | 415 | 7 matching functions + `apply_rules_in_order()` orchestrator + `find_duplicate_order_ids()` (differentiated Rule 4 for extended T+7 window) | Deterministic matching — the core engine |
 | [`rules/adjusted_amount.py`](file:///e:/Razorpay/backend/rules/adjusted_amount.py) | 100 | `validate_adjusted_amount()` — verifies that recorded fees/gst/tds match the expected rate card | Statutory compliance check |
 | [`rules/exception_taxonomy.py`](file:///e:/Razorpay/backend/rules/exception_taxonomy.py) | 342 | 30+ `ExceptionDefinition` objects across 8 domains, each with category_id, description, suggested_action, financial_impact | Standardize exception types |
-| [`ai/engine.py`](file:///e:/Razorpay/backend/ai/engine.py) | 627 | `FinanceVerificationOrchestrator` class: context assembly → feedback memory → LLM call → validator → audit persistence. Plus `_simulate_llm_reasoning()` fallback and `verify_discrepancies_clustered()` micro-batching | AI verification for rule misses |
+| [`ai/engine.py`](file:///e:/Razorpay/backend/ai/engine.py) | 627 | `FinanceVerificationOrchestrator` class: context assembly → feedback memory → LLM call → validator → audit persistence. Strict `disable_simulation_fallback` support + cluster micro-batching | AI verification for rule misses |
 | [`ai/validator.py`](file:///e:/Razorpay/backend/ai/validator.py) | 100 | `validate_finance_verification()`: independently recalculates `invoice - fees - gst - tds == settlement`. Assigns confidence: 99% (exact) / 88% (rounding) / 65% (unconfirmable) / 40% (contradicted). **Never trusts model's self-reported score.** | Safety anchor — prevents AI hallucination from becoming a ledger entry |
-| [`ai/llm_client.py`](file:///e:/Razorpay/backend/ai/llm_client.py) | 249 | `LLMClient`: multi-provider (Gemini + OpenAI), `temperature=0.0`, strict JSON schema, exponential backoff retry, per-call cost tracking, `AI_SPEND_CEILING_USD` budget cap | LLM gateway with cost control |
+| [`ai/llm_client.py`](file:///e:/Razorpay/backend/ai/llm_client.py) | 249 | `LLMClient`: multi-provider (Gemini + OpenAI), `temperature=0.0`, strict JSON schema, exponential backoff retry for HTTP 429, per-call cost tracking, `AI_SPEND_CEILING_USD` budget cap | LLM gateway with cost control |
 | [`ai/prompts.py`](file:///e:/Razorpay/backend/ai/prompts.py) | 21 | `SYSTEM_PROMPT` + `USER_PROMPT_TEMPLATE` with closed enum of 7 `likely_reason` values | Constrain LLM output to valid JSON schema |
 | [`ai/feedback_memory.py`](file:///e:/Razorpay/backend/ai/feedback_memory.py) | 146 | `FeedbackMemoryStore`: finds historical human corrections similar to current case by merchant type, amount magnitude, fee delta | Active learning from human reviews |
-| [`ai/verifier.py`](file:///e:/Razorpay/backend/ai/verifier.py) | 78 | `verify_discrepancy_for_match()` — **REDUNDANT wrapper** around `engine.py`. Does the same thing. | **SHOULD BE DELETED** |
-| [`services/pipeline.py`](file:///e:/Razorpay/backend/services/pipeline.py) | 343 | `process_reconciliation_batch()`: rule matching → AI → exceptions → gap detection → metrics. **THE MAIN ORCHESTRATOR.** | Pipeline coordination |
-| [`services/job_queue.py`](file:///e:/Razorpay/backend/services/job_queue.py) | 130 | `JobQueueManager` with `ThreadPoolExecutor(4)`. Background async processing with progress stages. | Handle large batches without blocking the API |
+| [`services/pipeline.py`](file:///e:/Razorpay/backend/services/pipeline.py) | 385 | `process_reconciliation_batch()`: rule matching → AI → exceptions → gap detection → metrics, with structured logging | Pipeline coordination |
+| [`services/job_queue.py`](file:///e:/Razorpay/backend/services/job_queue.py) | 185 | `JobQueueManager` with `ThreadPoolExecutor(4)` and DB persistence (`ReconciliationJob`) surviving server restarts | Handle large batches without blocking the API |
 | [`services/metrics.py`](file:///e:/Razorpay/backend/services/metrics.py) | 81 | `compute_batch_metrics()`: calculates precision, recall, F1, match rate, hours saved from confusion matrix | Scoring |
 | [`analytics/cash_position.py`](file:///e:/Razorpay/backend/analytics/cash_position.py) | 126 | `compute_cash_position()`: bank balance, pending settlements, refund reserves, next-day projections, liquidity health index | Treasury analytics |
 | [`reports/reporter.py`](file:///e:/Razorpay/backend/reports/reporter.py) | 267 | `generate_reconciliation_csv()`, `generate_tally_xml()` (Tally Prime XML), `generate_zoho_books_csv()`, `generate_netsuite_journal_json()` | ERP journal exports |
-| [`api/routes.py`](file:///e:/Razorpay/backend/api/routes.py) | 719 | 16+ REST endpoints: batch upload, demo, match querying, exception listing, human review, CSV export, ERP export, cash position, async jobs | HTTP API layer |
+| [`api/routes.py`](file:///e:/Razorpay/backend/api/routes.py) | 735 | 16+ REST endpoints with 10MB bounded upload streams (HTTP 413), duplicate conflict mapping (HTTP 409), and single-query batch map lookups | HTTP API layer |
 | [`api/auth.py`](file:///e:/Razorpay/backend/api/auth.py) | 137 | HMAC-SHA256 JWT: `create_access_token()`, `decode_access_token()`, `verify_api_key()`, `get_current_tenant()` | Authentication & multi-tenant |
 | [`api/rate_limiter.py`](file:///e:/Razorpay/backend/api/rate_limiter.py) | 39 | Sliding window rate limiter: 120 requests/minute per IP | Abuse prevention |
 | [`api/schemas.py`](file:///e:/Razorpay/backend/api/schemas.py) | 84 | Pydantic request/response models for API endpoints | API contracts |
@@ -338,8 +339,8 @@ These populate the KPI cards, match table, evidence drawers, and exception grid.
 |---|---|---|
 | **R1: Exact Order ID** | `invoice.order_id == settlement.order_id` AND `invoice.amount == settlement.amount` AND both have correct status AND date within T+2 | 100% |
 | **R2: Exact UTR** | `settlement.reference_number == bank.reference_number` AND `settlement.amount == bank.amount` AND both have correct status | 100% |
-| **R3: Exact Amount** | `invoice.amount == settlement.amount` AND correct statuses AND date within T+2 | 100% |
-| **R4: Date Window** | Same as R3 but explicit T+2 check (seems redundant with R3 — see flaws) | 100% |
+| **R3: Exact Amount** | `invoice.amount == settlement.amount` AND correct statuses AND immediate date within T+2 | 100% |
+| **R4: Extended Date Window** | `invoice.amount == settlement.amount` across extended settlement corridor (T+3 to T+7 days) for delayed ACH credits | 98% |
 | **R5: Fee Schedule** | Calculates `expected_fee = invoice.amount * 0.02`, `expected_gst = fee * 0.18`, `expected_tds = invoice.amount * 0.01`. Checks if settlement's recorded fees match these exact rates. Then checks `invoice.amount - fees - gst - tds == settlement.amount` | 100% |
 | **R6: Tolerance** | `abs(invoice.amount - settlement.amount) ≤ ₹2.00` with matching order_ids | 95% |
 | **R7: FX Spread** | `0.5% ≤ abs(delta / invoice.amount) ≤ 4.0%` with matching order_ids | 94% |
@@ -489,14 +490,15 @@ def extract_utr_from_description(description: str) -> Optional[str]:
 
 ## 8. Test Coverage — What's Tested, What's Not
 
-### What IS Tested (26 suites, 2,110 lines)
+### What IS Tested (28 suites, 97 passed tests, 78% line coverage)
 
 | Area | Test File | What It Verifies |
 |---|---|---|
-| 7-rule engine | `test_rules.py` (191 lines) | All 7 rules with positive/negative cases, duplicate detection |
+| Live LLM benchmark | `test_ai_live_benchmark.py` | Strict `disable_simulation_fallback=True`, token/cost accounting, real Gemini/OpenAI evaluation |
+| 7-rule engine | `test_rules.py` (191 lines) | All 7 rules with positive/negative cases, Rule 4 T+7 window, duplicate detection |
 | AI engine | `test_ai_engine.py` (197 lines) | Simulation output, context assembly, clustered batching |
 | Arithmetic validator | `test_validator.py` (44 lines) | exact/rounding/unconfirmable/contradicted outcomes |
-| CSV parsing | `test_parser_and_normalizer.py` (233 lines) | Schema validation, type coercion, error handling |
+| CSV parsing | `test_parser_and_normalizer.py` (233 lines) | Schema validation, type coercion, error handling, unique constraints |
 | Data cleaning | `test_data_cleaners.py` (58 lines) | Currency stripping, date parsing, status mapping |
 | Schema mapping | `test_schema_mapper.py` (84 lines) | Alias resolution, AI fallback |
 | Fee adjustment | `test_adjusted_amount.py` (52 lines) | Statutory rate card validation |
@@ -508,20 +510,22 @@ def extract_utr_from_description(description: str) -> Optional[str]:
 | ERP exports | `test_erp_export.py` (77 lines) | Tally XML, Zoho CSV, NetSuite JSON structure |
 | Cash position | `test_cash_position.py` (78 lines) | Treasury snapshot calculations |
 | Auth & tenancy | `test_auth_tenant.py` (53 lines) | JWT lifecycle, signature validation |
-| Security | `test_security.py` (74 lines) | Injection prevention |
+| Security | `test_security.py` (74 lines) | Upload size limits (HTTP 413), injection prevention |
 | Scalability | `test_scalability_10k.py` (27 lines) | 10,000 record processing |
-| Multi-merchant | `test_multi_merchant.py` (62 lines) | Cross-archetype evaluation |
+| Multi-merchant | `test_multi_merchant.py` (62 lines) | Cross-archetype evaluation across 11 profiles |
 | LLM client | `test_llm_client.py` (129 lines) | Provider selection, retry, cost tracking |
+| Job queue | `test_job_queue.py` (24 lines) | DB-backed async job submission and progress |
+| API health & CORS | `test_api_health.py` (21 lines) | Health endpoint, safe CORS preflight |
 
-### What Is NOT Tested
+### Remaining Testing Gaps (Future Roadmap)
 
-| Gap | Impact | Why It Matters |
-|---|---|---|
-| **No end-to-end integration test** | The full pipeline (upload CSV → get matches) is never tested through the API | A breaking change in any middle layer won't be caught |
-| **No live LLM test** | AI accuracy only tested with simulation | Real Gemini/OpenAI response parsing untested |
-| **No concurrent upload test** | Unknown behavior with 10 simultaneous uploads | Race conditions on batch creation possible |
-| **No encoding edge case tests** | Only UTF-8 tested | Latin-1/Windows-1252 files would fail silently |
-| **No coverage percentage** | Unknown % of lines actually executed | Could be 60% or 95% — we don't know |
+| Gap | Impact | Why It Matters | Status |
+|---|---|---|---|
+| **No end-to-end integration test** | The full pipeline is tested unit-by-unit rather than a single 100-record API upload flow | A breaking change in any middle layer won't be caught | Open |
+| **Live LLM test suite** | Live LLM benchmark exists in `test_ai_live_benchmark.py` | Validates live API accuracy against ground truth | **RESOLVED** |
+| **No concurrent upload stress test** | Unknown behavior with 10 simultaneous uploads | Race conditions on batch creation possible | Open |
+| **No encoding edge case tests** | Only UTF-8 tested | Latin-1/Windows-1252 files would fail silently | Open |
+| **Coverage percentage measurement** | `--cov=backend` in `pytest.ini` with 78% line coverage | Measures exact % of lines tested | **RESOLVED** |
 
 ---
 
