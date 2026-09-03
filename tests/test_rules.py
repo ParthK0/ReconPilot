@@ -20,7 +20,7 @@ from backend.rules import (
     find_duplicate_order_ids,
 )
 
-SYNTHETIC_DATA_DIR = "backend/synthetic-data"
+SYNTHETIC_DATA_DIR = "backend/synthetic_data"
 
 
 @pytest.fixture(scope="module")
@@ -133,6 +133,16 @@ def test_rule_settlement_date_window(loaded_dataset):
     settle_del = loaded_dataset["settlements"][delayed_gt["settlement_id"]]
 
     assert match_settlement_date_window(invoice=inv_del, settlement=settle_del, max_days=2).is_matched is False
+
+    # Settled transaction with T+5 days delay: fails strict T+2 Rule 3, but matches Rule 4 extended window (T+7)
+    inv_t5 = inv.model_copy()
+    settle_t5 = settle.model_copy(update={"txn_date": inv.txn_date + timedelta(days=5)})
+    assert match_exact_amount(invoice=inv_t5, settlement=settle_t5, max_days=2).is_matched is False
+
+    res_del = match_settlement_date_window(invoice=inv_t5, settlement=settle_t5, max_days=7)
+    assert res_del.is_matched is True
+    assert res_del.confidence == Decimal("98.00")
+    assert res_del.rule_name == "settlement_date_window"
 
 
 # ---------------------------------------------------------------------------

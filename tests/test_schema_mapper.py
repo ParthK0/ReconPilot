@@ -5,6 +5,11 @@ from backend.schema_mapper.mapper import SchemaMapper, default_schema_mapper, ma
 from backend.parser.csv_parser import SmartCSVParser, SchemaValidationError
 
 
+@pytest.fixture(autouse=True)
+def force_offline_mode(monkeypatch):
+    monkeypatch.setenv("RECONPILOT_AI_MODE", "offline")
+
+
 def test_schema_mapper_exact_matching():
     cols = ["invoice_id", "order_id", "amount", "invoice_date", "customer_name", "status"]
     mapping = map_schema(cols, "invoice")

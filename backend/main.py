@@ -7,15 +7,20 @@ from dotenv import load_dotenv
 from backend.db.session import init_db, DATABASE_URL
 from backend.api.routes import router as api_router
 from backend.api.rate_limiter import RateLimiterMiddleware
+from backend.logging_config import get_logger
 
 load_dotenv()
+logger = get_logger("main")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize database tables on startup
+    logger.info("Initializing database schema...")
     init_db()
+    logger.info("ReconPilot API ready to accept requests.")
     yield
+    logger.info("ReconPilot API shutting down.")
 
 
 app = FastAPI(
@@ -34,11 +39,17 @@ allowed_origins = [origin.strip() for origin in origins_env.split(",") if origin
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins if allowed_origins else ["*"],
+    allow_origins=allowed_origins if allowed_origins else ["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# CSRF Protection Note (M4):
+# ReconPilot utilizes stateless Bearer token and API key headers for authentication.
+# In accordance with OWASP API Security guidelines, CSRF protection is not applicable
+# because credentials are not automatically transmitted via ambient browser cookies.
+# If session cookie-based authentication is ever introduced, CSRF token middleware must be mounted.
 
 # Mount API router
 app.include_router(api_router)

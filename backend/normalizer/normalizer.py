@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Optional, Union
 import pandas as pd
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from backend.db.models import Record
 from backend.normalizer.data_cleaners import (
@@ -172,7 +173,14 @@ def persist_normalized_records(
         db_records.append(db_rec)
         db.add(db_rec)
     
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        raise ValueError(
+            f"Duplicate record detected for batch '{batch_id}'. A record with the same transaction ID and source type already exists."
+        ) from e
+
     for db_rec in db_records:
         db.refresh(db_rec)
     return db_records

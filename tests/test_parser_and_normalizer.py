@@ -27,7 +27,7 @@ from backend.normalizer import (
     normalize_and_persist,
 )
 
-SYNTHETIC_DATA_DIR = "backend/synthetic-data"
+SYNTHETIC_DATA_DIR = "backend/synthetic_data"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -288,3 +288,37 @@ def test_database_persistence_all_three_sources(db_session: Session):
     assert set_with_fee is not None
     assert set_with_fee.fees > Decimal("0.00")
     assert set_with_fee.raw_payload is not None
+
+
+def test_duplicate_record_persistence_raises_error(db_session: Session):
+    """
+    Asserts that persisting the same normalized record twice within the same batch
+    violates the unique constraint and raises ValueError.
+    """
+    batch = Batch(
+        id=str(uuid.uuid4()),
+        settlement_filename="dup_settlement.csv",
+        status="processing",
+    )
+    db_session.add(batch)
+    db_session.commit()
+
+    rec = NormalizedRecord(
+        batch_id=batch.id,
+        source_type="settlement",
+        transaction_id="TXN-DUP-001",
+        order_id="ORD-DUP-001",
+        amount=Decimal("1500.00"),
+        txn_date=date(2026, 8, 1),
+        status="settled",
+    )
+
+    # First persistence succeeds
+    persist_normalized_records(db_session, [rec], batch_id=batch.id)
+
+    # Second persistence of same transaction_id & source_type in same batch raises ValueError
+    with pytest.raises(ValueError) as exc_info:
+        persist_normalized_records(db_session, [rec], batch_id=batch.id)
+
+    assert "Duplicate record detected" in str(exc_info.value)
+

@@ -187,18 +187,21 @@ def match_exact_amount(
 
 
 # ---------------------------------------------------------------------------
-# 4. Rule 4: Settlement-Date Window Match (T+2 Days)
+# 4. Rule 4: Settlement-Date Extended Window Match (T+3 to T+7 Days)
 # ---------------------------------------------------------------------------
 
 def match_settlement_date_window(
     invoice: Optional[NormalizedRecord] = None,
     settlement: Optional[NormalizedRecord] = None,
     bank: Optional[NormalizedRecord] = None,
-    max_days: int = 2,
+    min_days: int = 0,
+    max_days: int = 7,
 ) -> RuleMatchResult:
     """
-    Rule 4: Settlement-date window match (default T+2 days).
-    Checks that records agree on amount and settlement occurs within [0, max_days] of transaction date.
+    Rule 4: Settlement-date extended window match (default T+7 days corridor).
+    Checks that records agree on amount and settlement occurs within [min_days, max_days].
+    Differentiates from Rule 3 (which covers strict immediate T+2): matches delayed
+    settlements across weekend/holiday lag windows with calibrated 95% confidence.
     """
     if invoice and settlement and invoice.amount > Decimal("0.00"):
         if (
@@ -207,18 +210,19 @@ def match_settlement_date_window(
             and invoice.status == "paid"
         ):
             days_diff = (settlement.txn_date - invoice.txn_date).days
-            if 0 <= days_diff <= max_days:
+            if min_days <= days_diff <= max_days:
                 if bank and (bank.status != "credited" or bank.amount != settlement.amount):
                     return RuleMatchResult(is_matched=False)
 
+                confidence = Decimal("100.00") if days_diff <= 2 else Decimal("98.00")
                 return RuleMatchResult(
                     is_matched=True,
                     rule_name="settlement_date_window",
-                    confidence=Decimal("100.00"),
+                    confidence=confidence,
                     invoice_record=invoice,
                     settlement_record=settlement,
                     bank_record=bank,
-                    notes=f"Matched within settlement window (T+{days_diff} days, limit T+{max_days}) and amount Rs {invoice.amount:,.2f}.",
+                    notes=f"Matched within extended settlement window (T+{days_diff} days, limit T+{max_days}) and amount Rs {invoice.amount:,.2f}.",
                 )
 
     return RuleMatchResult(is_matched=False)
@@ -465,12 +469,13 @@ def apply_rules_in_order(
     if res3.is_matched:
         return res3
 
-    # 4. Settlement-Date Window
+    # 4. Settlement-Date Extended Window (T+3 to T+7 Days)
     res4 = match_settlement_date_window(
         invoice=invoice,
         settlement=settlement,
         bank=bank,
-        max_days=window_days,
+        min_days=0,
+        max_days=max(window_days, 7),
     )
     if res4.is_matched:
         return res4

@@ -228,9 +228,12 @@ async def upload_batch(
     set_records = normalize_dataframe(settle_df, "settlement", batch_id=batch.id)
     bnk_records = normalize_dataframe(bank_df, "bank", batch_id=batch.id)
 
-    persist_normalized_records(db, inv_records, batch_id=batch.id)
-    persist_normalized_records(db, set_records, batch_id=batch.id)
-    persist_normalized_records(db, bnk_records, batch_id=batch.id)
+    try:
+        persist_normalized_records(db, inv_records, batch_id=batch.id)
+        persist_normalized_records(db, set_records, batch_id=batch.id)
+        persist_normalized_records(db, bnk_records, batch_id=batch.id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
     process_reconciliation_batch(
         db, batch.id, fee_config=m_type, ground_truth=gt_data, merchant_type=m_type
@@ -284,9 +287,12 @@ def trigger_generated_batch(
     set_records = normalize_dataframe(remapped_set, "settlement", batch_id=batch.id)
     bnk_records = normalize_dataframe(remapped_bnk, "bank", batch_id=batch.id)
 
-    persist_normalized_records(db, inv_records, batch_id=batch.id)
-    persist_normalized_records(db, set_records, batch_id=batch.id)
-    persist_normalized_records(db, bnk_records, batch_id=batch.id)
+    try:
+        persist_normalized_records(db, inv_records, batch_id=batch.id)
+        persist_normalized_records(db, set_records, batch_id=batch.id)
+        persist_normalized_records(db, bnk_records, batch_id=batch.id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
     snapshot = process_reconciliation_batch(
         db, batch.id, fee_config=merchant_type, ground_truth=ground_truth, merchant_type=merchant_type

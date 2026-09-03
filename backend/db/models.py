@@ -14,6 +14,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     JSON,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import declarative_base, relationship
@@ -73,6 +74,7 @@ class Record(Base):
     exceptions = relationship("ExceptionRecord", back_populates="record", cascade="all, delete-orphan")
 
     __table_args__ = (
+        UniqueConstraint("batch_id", "transaction_id", "source_type", name="uq_records_batch_txn_source"),
         Index("idx_records_batch_source", "batch_id", "source_type"),
         Index("idx_records_order_id", "order_id"),
         Index("idx_records_reference_number", "reference_number"),
@@ -199,3 +201,26 @@ class FeedbackMemoryRecord(Base):
         Index("idx_feedback_corrected_reason", "corrected_reason"),
         Index("idx_feedback_org_id", "org_id"),
     )
+
+
+class ReconciliationJob(Base):
+    __tablename__ = "reconciliation_jobs"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id = Column(String(100), nullable=False, default="org_default", index=True)
+    batch_id = Column(String(36), ForeignKey("batches.id"), nullable=False)
+    status = Column(String(50), nullable=False, default="queued")  # queued, processing, completed, failed
+    stage = Column(String(50), nullable=False, default="initializing")
+    progress = Column(Numeric(5, 2), nullable=False, default=Decimal("0.00"))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    result_payload = Column(JSON, nullable=True)
+    error_message = Column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("idx_jobs_batch_id", "batch_id"),
+        Index("idx_jobs_status", "status"),
+        Index("idx_jobs_org_id", "org_id"),
+    )
+
