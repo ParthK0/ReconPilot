@@ -1,7 +1,9 @@
 # ReconPilot 2.0: Principal Software Architect Due Diligence & Technical Audit
 
-**Evaluator**: Principal Software Architect & Staff AI Engineer  
-**Date**: September 4, 2026  
+**Evaluator**: Principal Software Architect & Staff AI Systems Engineer  
+**Document Version**: 2.1.0 (Principal Architect Due Diligence)  
+**Evaluation Date**: September 4, 2026  
+**Last Verified Against Commit**: `15a6ae4`  
 **Evaluation Scope**: Full repository source code inspection across `backend/`, `frontend/`, `tests/`, `docs/`, Docker, and CI/CD pipelines.  
 **Governing Standard**: Strict ground-truth code verification. No inflated claims, no speculative metrics, and zero hand-waved assertions. Only features, numbers, and limitations verified by execution are documented.
 
@@ -31,13 +33,13 @@
 
 ## 1. Executive Summary & Architectural Thesis
 
-ReconPilot 2.0 is an enterprise-grade financial reconciliation engine specifically engineered to resolve the structural friction of Indian digital commerce: 3-way reconciliation between **ERP Invoices**, **Payment Gateway Settlements (Razorpay)**, and **Commercial Bank Statements**.
+ReconPilot 2.0 is a production-oriented, enterprise-inspired financial reconciliation engine specifically engineered to resolve the structural friction of Indian digital commerce: 3-way reconciliation between **ERP Invoices**, **Payment Gateway Settlements (Razorpay)**, and **Commercial Bank Statements**.
 
 ### The Architectural Thesis: Rules Before AI
 The central premise of ReconPilot is that **generative models should never perform primary financial reconciliation or direct arithmetic**. The platform enforces a bifurcated matching architecture:
-1. **Deterministic Layer First**: A 7-stage priority rule engine resolves standard matches, contractual fee schedules, reference UTRs, and known corridors in sub-milliseconds with 100% confidence.
-2. **AI as Forensic Hypothesis Generator**: Only residual rule misses (~14% of edge cases) route to the multi-provider LLM client (Gemini 2.5 Pro / GPT-5.6 Terra).
-3. **Independent Arithmetic Interception**: All LLM claims are intercepted before persistence. The Python validator independently re-derives the deduction formula to the exact paisa (₹0.01). If the math fails or cannot be confirmed by an equation, the self-reported confidence is discarded and the transaction is safely routed to human review.
+1. **Deterministic Layer First**: A 7-stage priority Deterministic Rule Engine resolves standard matches, contractual fee schedules, reference UTRs, and known corridors in sub-milliseconds with 100% confidence.
+2. **AI as Forensic Hypothesis Generator**: Only residual rule misses route to the multi-provider Finance Verification Engine (Gemini 2.5 Pro / GPT-5.6 Terra).
+3. **Independent Arithmetic Interception**: All LLM claims are intercepted before persistence. The Paisa Arithmetic Validator independently re-derives the deduction formula to the exact paisa (₹0.01). If the math fails or cannot be confirmed by an equation, the self-reported confidence is discarded and the transaction is safely routed to human review, structurally minimizing hallucination risk.
 4. **Closed-Loop Feedback**: Reviewer resolutions are saved to a Feedback Memory Store, allowing the system to learn recurring merchant-specific fee patterns without fine-tuning.
 
 ---

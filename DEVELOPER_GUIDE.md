@@ -2,6 +2,9 @@
 ## Comprehensive File-by-File Architecture, Data Flows, Rule Specifications, and Verification Mechanics
 
 > **Audience**: Staff Engineers, Core Maintainers, System Architects, and Technical Auditors.  
+> **Document Version**: 2.1.0 (Developer & Engineering Reference)  
+> **Evaluation Date**: September 4, 2026  
+> **Last Verified Against Commit**: `15a6ae4`  
 > **Scope**: Strict, verified documentation of the active implementation. Every package, file, data flow, validation step, deterministic rule, AI interaction, database transaction, and background job described herein is derived directly from the active code in this repository.
 
 ---
