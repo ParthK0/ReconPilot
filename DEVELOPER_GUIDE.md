@@ -1,523 +1,640 @@
-# ReconPilot — Internal Developer Documentation
-## Every Function, Every Pipeline Stage, Every Flaw, Every Data Decision
+# ReconPilot 2.0 — Internal Developer & Engineering Guide
+## Comprehensive File-by-File Architecture, Data Flows, Rule Specifications, and Verification Mechanics
 
-> **This document is NOT an architecture overview or setup guide.**  
-> It explains **what each file does line-by-line, how data flows through every stage, how we currently check data (and what's fake), and exactly what needs to change.**
+> **Audience**: Staff Engineers, Core Maintainers, System Architects, and Technical Auditors.  
+> **Scope**: Strict, verified documentation of the active implementation. Every package, file, data flow, validation step, deterministic rule, AI interaction, database transaction, and background job described herein is derived directly from the active code in this repository.
 
 ---
 
 ## Table of Contents
 
-1. [The Data Problem We Are Solving](#1-the-data-problem-we-are-solving)
-2. [What Data We Currently Use (Synthetic) and What Real Data Would Look Like](#2-what-data-we-currently-use-and-what-real-data-would-look-like)
-3. [Complete Pipeline: How Data Flows Through The System](#3-complete-pipeline-step-by-step)
-4. [File-by-File: What Every File Does and Why It Exists](#4-file-by-file-breakdown)
-5. [How We Check / Validate Data at Every Stage](#5-how-we-check-and-validate-data)
-6. [Current Flaws — What's Broken, Fake, or Missing](#6-current-flaws)
-7. [What Needs To Change When We Switch to Real Data](#7-what-needs-to-change-for-real-data)
-8. [Test Coverage — What's Tested, What's Not](#8-test-coverage)
+1. [Architectural Overview & Core Data Flow](#1-architectural-overview--core-data-flow)
+2. [File-by-File Repository Breakdown](#2-file-by-file-repository-breakdown)
+   - [2.1 Root & DevOps](#21-root--devops)
+   - [2.2 Backend Core (`backend/`)](#22-backend-core-backend)
+   - [2.3 API Gateway & Security (`backend/api/`)](#23-api-gateway--security-backendapi)
+   - [2.4 Database & Persistence (`backend/db/`)](#24-database--persistence-backenddb)
+   - [2.5 Ingestion, Parsing & Normalization (`backend/parser/`, `backend/normalizer/`, `backend/schema_mapper/`)](#25-ingestion-parsing--normalization)
+   - [2.6 Deterministic Rule Engine & Exception Taxonomy (`backend/rules/`)](#26-deterministic-rule-engine--exception-taxonomy-backendrules)
+   - [2.7 AI Verification Engine & Math Validator (`backend/ai/`)](#27-ai-verification-engine--math-validator-backendai)
+   - [2.8 Services, Pipeline & Job Queue (`backend/services/`)](#28-services-pipeline--job-queue-backendservices)
+   - [2.9 Analytics & Reports (`backend/analytics/`, `backend/reports/`)](#29-analytics--reports-backendanalytics-backendreports)
+   - [2.10 Integrations & Adapters (`backend/integrations/`)](#210-integrations--adapters-backendintegrations)
+   - [2.11 Synthetic Data & Archetypes (`backend/synthetic_data/`)](#211-synthetic-data--archetypes-backendsynthetic_data)
+   - [2.12 Evaluation Pipeline (`backend/evaluation/`)](#212-evaluation-pipeline-backendevaluation)
+   - [2.13 Frontend Architecture (`frontend/`)](#213-frontend-architecture-frontend)
+   - [2.14 Test Suite (`tests/`)](#214-test-suite-tests)
+3. [Data Flow: Ingestion to ERP Export](#3-data-flow-ingestion-to-erp-export)
+4. [Data Validation & Sanitization Pipeline](#4-data-validation--sanitization-pipeline)
+5. [The 7-Stage Deterministic Rule Engine: Deep Dive](#5-the-7-stage-deterministic-rule-engine-deep-dive)
+6. [Finance Verification Engine & Independent Math Validation](#6-finance-verification-engine--independent-math-validation)
+7. [Active Feedback Memory Store & Precedent Learning](#7-active-feedback-memory-store--precedent-learning)
+8. [Database Schema, Indexing & Multi-Tenancy](#8-database-schema-indexing--multi-tenancy)
+9. [Asynchronous Background Job Queue](#9-asynchronous-background-job-queue)
+10. [REST API Layer, Rate Limiting & Security Safeguards](#10-rest-api-layer-rate-limiting--security-safeguards)
+11. [Error Handling & Resilience Architecture](#11-error-handling--resilience-architecture)
+12. [Verified Engineering Limitations & Boundary Conditions](#12-verified-engineering-limitations--boundary-conditions)
 
 ---
 
-## 1. The Data Problem We Are Solving
+## 1. Architectural Overview & Core Data Flow
 
-A merchant sells ₹10,000 worth of goods. Razorpay collects ₹10,000 from the customer. But the merchant doesn't receive ₹10,000. They receive:
+ReconPilot reconciles three financial streams:
+- **ERP / Sales Invoices**: Gross amounts billed to customers (`amount`, `invoice_date`, `order_id`, `status`).
+- **Payment Gateway Settlements**: Net amounts disbursed by Razorpay after deducting MDR fees, GST on fees, and Section 194-O TDS (`amount`, `settlement_date`, `order_id`, `reference_number`, `fees`, `gst`, `tds`).
+- **Commercial Bank Statements**: Lump-sum credit payouts deposited into merchant core banking accounts (`amount`, `txn_date`, `reference_number`, `balance`).
 
-```
-₹10,000 (gross sale)
-  - ₹200   (2% MDR fee to Razorpay)
-  - ₹36    (18% GST on the ₹200 fee)
-  - ₹100   (1% TDS under Section 194-O)
-= ₹9,664  (net settlement to merchant's bank)
-```
-
-The merchant's ERP says they're owed ₹10,000. Their bank says they got ₹9,664. Razorpay's settlement report explains the ₹336 gap with fees/gst/tds columns. **But nobody automatically cross-checks all three.**
-
-That's what ReconPilot does. Three CSV files in → matched, verified, exceptions out.
-
-### The Three Files
-
-| File | Source | Key Columns | What It Represents |
-|---|---|---|---|
-| **Invoice CSV** | Merchant's ERP (Tally, Zoho, custom) | `invoice_id`, `order_id`, `amount`, `invoice_date`, `status` | "What we billed the customer" |
-| **Settlement CSV** | Downloaded from Razorpay Dashboard | `settlement_id`, `order_id`, `amount`, `settlement_date`, `reference_number`, `status`, `fees`, `gst`, `tds` | "What Razorpay paid us after deductions" |
-| **Bank Statement CSV** | Downloaded from HDFC/ICICI/SBI net banking | `bank_txn_id`, `txn_date`, `description`, `reference_number`, `amount`, `balance`, `status` | "What actually landed in our bank account" |
-
-### The Matching Logic
-
-The core question for every settlement row is:
-
-> **"Can we find the matching invoice AND bank credit, and does the math check out?"**
-
-- **Invoice ↔ Settlement**: linked by `order_id`. Amount difference should equal `fees + gst + tds`.
-- **Settlement ↔ Bank**: linked by `reference_number` (UTR). Amounts should be equal.
-- **Invoice ↔ Bank**: indirect — through settlement as the bridge.
+### Core Architectural Decisions
+1. **Deterministic Priority (Rules Before AI)**: Deterministic business rules execute first. AI verification only evaluates records that fail deterministic rules.
+2. **Independent Arithmetic Validation**: The LLM's self-reported confidence is discarded. The engine re-derives the claim mathematically using Python `Decimal` to the exact paisa (₹0.01).
+3. **Active Feedback Memory**: Human review decisions are persisted to dynamic storage to boost automated confidence on identical or similar recurring discrepancies.
+4. **Multi-Tenancy**: All database tables enforce tenant isolation via `org_id`.
+5. **Streaming DOS Protection**: Chunk-bounded streams enforce a 10MB upload ceiling per file before memory buffering.
 
 ---
 
-## 2. What Data We Currently Use and What Real Data Would Look Like
+## 2. File-by-File Repository Breakdown
 
-### Current State: 100% Synthetic Data
+### 2.1 Root & DevOps
 
-We generate ALL our test data in [`backend/synthetic_data/generator.py`](file:///e:/Razorpay/backend/synthetic_data/generator.py) (1,259 lines). This is the single biggest "honesty problem" in the project.
+#### `Dockerfile`
+- **Location**: Root directory.
+- **Base Image**: `python:3.12-slim`.
+- **Function**: Builds the backend production container. Installs `build-essential`, `libpq-dev`, `curl`. Copies `requirements.txt`, installs dependencies, copies backend code, sets `PORT=8000`, `RECONPILOT_AI_MODE=offline`.
+- **Healthcheck**: Probes `http://localhost:8000/api/v1/health` every 10s.
 
-**What the generator creates:**
-- 100 invoices, 100 settlements, 100 bank statements
-- Each with a matching `order_id` across invoice ↔ settlement
-- Each with a matching `reference_number` across settlement ↔ bank
-- Pre-computed fee/gst/tds based on configurable rates
-- 10 scenario types with known ground truth labels
+#### `docker-compose.yml`
+- **Location**: Root directory.
+- **Services**:
+  1. `db`: `postgres:16-alpine`, port 5432, healthcheck via `pg_isready`.
+  2. `backend`: Builds `./Dockerfile`, depends on healthy `db`, port 8000, environment config for `DATABASE_URL`.
+  3. `frontend`: Builds `./frontend/Dockerfile`, depends on `backend`, port 3000, sets `NEXT_PUBLIC_API_URL=http://localhost:8000`.
 
-**The 10 scenario types:**
-```
-70 × exact_match       — Invoice amount == settlement amount (no deductions)
- 8 × fee_deduction     — Standard 2% MDR fee applied
- 5 × gst_deduction     — 2% MDR + 18% GST on MDR
- 3 × tds_deduction     — 2% MDR + 18% GST + 1% TDS
- 6 × ai_custom         — Non-standard one-off fees (₹30, ₹45, etc.)
- 2 × settlement_delay  — Settlement status = "pending"
- 2 × partial_refund    — Invoice status = "refunded", negative bank amounts
- 2 × duplicate_invoice — Same order_id on two different invoices
- 1 × missing_credit    — Settlement exists, bank credit missing
- 1 × unknown           — Genuinely unexplainable discrepancy
-```
+#### `requirements.txt`
+- **Location**: Root directory.
+- **Dependencies**: `fastapi>=0.115.0`, `uvicorn[standard]>=0.31.0`, `pydantic>=2.9.0`, `pydantic-settings>=2.5.0`, `sqlalchemy>=2.0.35`, `psycopg2-binary>=2.9.9`, `pandas>=2.2.0`, `python-dotenv>=1.0.1`, `httpx>=0.27.2`, `python-multipart>=0.0.12`, `pytest>=8.3.3`, `pytest-cov>=5.0.0`, `alembic>=1.13.0`.
 
-### Why This Is A Problem
+#### `pytest.ini`
+- **Location**: Root directory.
+- **Configuration**: Sets `testpaths = tests`, default flags `-v --tb=short --cov=backend --cov-report=term-missing`.
 
-The synthetic data is **perfectly clean**:
-- Every `order_id` is a well-formed string like `"ORD_00001"`
-- Every amount is a round number or exact percentage
-- Every date is within the expected T+2 window
-- Every UTR matches exactly between settlement and bank
-- There are **no encoding issues, no Unicode, no truncated columns, no timezone mismatches**
+#### `alembic.ini`
+- **Location**: Root directory.
+- **Function**: Configuration for database schema migrations via Alembic.
 
-Real Razorpay data has:
-- Order IDs with prefixes, suffixes, case differences (`order_KjN23x` vs `ORDER_KJN23X`)
-- Amounts with paisa-level rounding differences
-- Dates in 5+ different formats across the three sources
-- UTR numbers with spaces, slashes, hyphens (`UTR/2026/08/12345` vs `UTR2026080012345`)
-- Bank descriptions like `"RAZORPAY-UTR123456-NEFT"` that need to be parsed to extract the UTR
-- Settlements spanning across midnight / weekend rollovers
-- Partial settlements (one invoice settled in multiple tranches)
-- Foreign currency transactions with FX conversion markup
-
-### What Would Need To Change For Real Data
-
-| Component | Current (Synthetic) | Real Data Requirement | Effort |
-|---|---|---|---|
-| **Order ID matching** | Exact string equality | Case-insensitive, strip prefixes, fuzzy match | Medium |
-| **UTR extraction from bank** | Direct `reference_number` column | Regex extraction from `description` field | Medium |
-| **Date parsing** | Generator outputs ISO dates | Already handles 20+ formats via `clean_date()` — mostly ready | Low |
-| **Amount rounding** | Exact amounts from generator | Already handles ₹2.00 tolerance via Rule 6 — mostly ready | Low |
-| **Encoding** | UTF-8 only | Need `chardet` detection for Latin-1/Windows-1252 | Low |
-| **Partial settlements** | Not modeled | Need split-match tracking with remaining balance | High |
-| **Weekend rollovers** | Not modeled | Need business-day calendar integration | Medium |
-| **Multi-currency** | FX archetype exists but synthetic | Need live FX rate lookup or tolerance band | Medium |
-| **CSV column names** | Use exact expected headers | Schema mapper with 178 aliases already handles most variants | Low |
+#### `.github/workflows/ci.yml`
+- **Location**: `.github/workflows/`
+- **Jobs**:
+  1. `backend-test`: Ubuntu runner, Python 3.12, installs `libpq-dev`, sets `RECONPILOT_AI_MODE=offline`, runs `pytest -m "not live_llm" --cov=backend --cov-report=xml:coverage.xml`, uploads artifact.
+  2. `frontend-build`: Node.js 20, runs `npm ci` and `npm run build` in `frontend/`.
+  3. `docker-validate`: Builds backend and frontend Docker images without pushing.
 
 ---
 
-## 3. Complete Pipeline: Step by Step
+### 2.2 Backend Core (`backend/`)
 
-Here's exactly what happens when a user clicks "Generate & Reconcile Demo Batch" or uploads 3 CSVs:
+#### `backend/main.py`
+- **Entrypoint**: Configures FastAPI application instance (`title="ReconPilot API"`, `version="1.0.0"`).
+- **Lifespan**: Initializes database schema via `init_db()` upon startup.
+- **Middleware**: Mounts `RateLimiterMiddleware` (120 req/min) and `CORSMiddleware` (configurable via `CORS_ORIGINS`).
+- **Health Check**: `GET /health` root health check for load balancers and container orchestrators.
+- **Router**: Mounts `api_router` from `backend.api.routes`.
 
-### Stage 1: Ingestion (Entry Point)
+#### `backend/logging_config.py`
+- **Function**: Standardizes logging across all modules using `logging.Formatter` (`%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d - %(message)s`).
+- **Helper**: `get_logger(name)` returns named loggers under the `reconpilot` namespace.
 
-**Entry:** [`backend/api/routes.py`](file:///e:/Razorpay/backend/api/routes.py) → `POST /api/v1/batches/demo` or `POST /api/v1/batches`
+---
 
-**What happens:**
-1. For demo: calls [`generate_merchant_dataset()`](file:///e:/Razorpay/backend/synthetic_data/generator.py) to create 3 CSV strings + ground truth JSON
-2. For upload: reads 3 `UploadFile` objects from the request
-3. `_read_validated_file()` validates `upload_file.size` and enforces bounded chunk streaming (`MAX_FILE_SIZE_BYTES = 10MB`), returning HTTP 413 Payload Too Large before memory buffering
+### 2.3 API Gateway & Security (`backend/api/`)
 
-### Stage 2: Parsing
+#### `backend/api/routes.py`
+- **Function**: Core REST controller hosting all 17 public endpoints.
+- **DoS Guard**: `_read_validated_file` safely reads file streams up to `MAX_FILE_SIZE_BYTES = 10MB` using chunked reads (`max_size + 1`) to prevent Out-Of-Memory exhaustion.
+- **Endpoints**:
+  - `GET /api/v1/health`: Checks database connectivity (`SELECT 1`).
+  - `GET /api/v1/merchants`: Returns metadata for all 10 registered merchant archetypes.
+  - `POST /api/v1/schema/preview`: Returns schema mapping confidence tiers (`auto_map`, `suggest`, `reject`).
+  - `POST /api/v1/batches`: Accepts 3 CSVs (settlement, bank, invoice), parses, normalizes, persists, and reconciles.
+  - `POST /api/v1/batches/generate`: On-demand scalable batch generation (100 to 10,000 records).
+  - `POST /api/v1/batches/demo`: Pre-configured demo run against 100-row Retail dataset.
+  - `GET /api/v1/batches/{id}`: Batch metadata, status, and record count.
+  - `GET /api/v1/batches/{id}/matches`: Paginated match list optimized with single batch record map lookup to eliminate N+1 queries.
+  - `GET /api/v1/matches/{id}`: Match detail, calculation trace, AI telemetry, and similar past cases.
+  - `GET /api/v1/batches/{id}/exceptions`: Exception classification report grouped by taxonomy.
+  - `GET /api/v1/batches/{id}/metrics`: Headline KPIs and confusion matrix.
+  - `POST /api/v1/matches/{id}/review`: Resolves exception and writes resolution into Feedback Memory.
+  - `GET /api/v1/batches/{id}/export`: Exports standard reconciliation audit report as CSV.
+  - `POST /api/v1/auth/token`: Generates signed HMAC-SHA256 JWT access token.
+  - `POST /api/v1/reconciliation/jobs`: Submits batch for asynchronous background execution.
+  - `GET /api/v1/reconciliation/jobs/{id}`: Polls real-time progress of background worker job.
+  - `GET /api/v1/batches/{id}/erp-journal`: Exports accounting entries (`tally`, `zoho`, `netsuite`).
+  - `GET /api/v1/batches/{id}/cash-position`: Treasury cash position and working capital analytics.
 
-**File:** [`backend/parser/csv_parser.py`](file:///e:/Razorpay/backend/parser/csv_parser.py) (317 lines)
+#### `backend/api/schemas.py`
+- **Function**: Typed Pydantic request/response data contracts.
+- **Models**: `ReviewMatchRequest`, `ReviewMatchResponse`, `BatchStatusResponse`, `GeneratedBatchResponse`, `BatchUploadResponse`, `MatchSummaryItem`, `PaginatedMatchesResponse`, `MerchantMetadataResponse`.
 
-**What happens:**
-1. `SmartCSVParser.parse()` is called for each of the 3 files
-2. `_read_to_dataframe()` converts the input (path/string/bytes/stream) into a pandas DataFrame
-3. `validate_schema()` checks that all required columns exist (e.g., invoice needs `invoice_id, order_id, amount, invoice_date, customer_name, status`)
-4. If columns are missing, tries schema mapper (178 aliases + AI fallback)
-5. `_sanitize_formulas()` strips CSV formula injection prefixes (`=`, `@`, `+`, `-` followed by letters)
+#### `backend/api/auth.py`
+- **Function**: Authentication, token signing, and multi-tenant scoping.
+- **JWT Signing**: `create_access_token` signs payloads with HMAC-SHA256 (`HS256`) using `JWT_SECRET` with 24-hour expiration.
+- **JWT Decoding**: `decode_access_token` verifies signature and expiration timestamp.
+- **API Key Guard**: `verify_api_key` validates `X-API-Key` or `Authorization: Bearer <key>` against `DEMO_API_KEY` or `RECONPILOT_API_KEY`.
+- **Tenant Scoping**: `get_current_tenant` extracts tenant identifier from JWT claims (`org_id`, `tenant_id`, `sub`) or `X-Tenant-ID` header, defaulting to `"org_default"`.
 
-**Data check:**
-- If required columns are missing AND schema mapper can't resolve them → `SchemaValidationError`
-- If CSV is empty → `EmptyFileError`
-- If CSV is unparseable → `InvalidCSVFormatError`
+#### `backend/api/rate_limiter.py`
+- **Class**: `RateLimiterMiddleware(BaseHTTPMiddleware)`.
+- **Mechanism**: In-memory sliding window tracking request timestamps per client IP.
+- **Capacity**: 120 requests/minute. Exceeding limits returns `HTTP 429 Too Many Requests` with a `Retry-After` header.
 
-**Flaw:** No encoding detection. `pd.read_csv()` defaults to UTF-8. A Latin-1 encoded file silently corrupts non-ASCII characters.
+---
 
-### Stage 3: Schema Mapping (if needed)
+### 2.4 Database & Persistence (`backend/db/`)
 
-**File:** [`backend/schema_mapper/mapper.py`](file:///e:/Razorpay/backend/schema_mapper/mapper.py) (306 lines)
+#### `backend/db/models.py`
+Defines 8 SQLAlchemy ORM models inheriting from `declarative_base()`:
+1. `Batch` (`batches`): `id` (UUID PK), `org_id`, filenames, `status` (`uploaded`, `processing`, `done`, `failed`), `uploaded_at`.
+2. `Record` (`records`): `id` (UUID PK), `org_id`, `batch_id` (FK), `source_type` (`invoice`, `settlement`, `bank`), `transaction_id`, `order_id`, `amount`, `currency`, `fx_rate`, `txn_date`, `reference_number`, `status`, `fees`, `gst`, `tds`, `raw_payload`. Unique constraint on `(batch_id, transaction_id, source_type)`.
+3. `Match` (`matches`): `id` (UUID PK), `org_id`, `batch_id` (FK), `settlement_record_id` (FK), `bank_record_id` (FK), `invoice_record_id` (FK), `match_method` (`rule`, `ai`), `rule_name`, `confidence`, `status` (`matched`, `exception`), `created_at`.
+4. `AIVerification` (`ai_verifications`): `id` (UUID PK), `match_id` (FK unique), `difference_amount`, `likely_reason`, `reasoning_explanation`, `expected_value`, `ai_confidence`, `adjusted_confidence`, `evidence_field`, `model_used`, `prompt_tokens`, `completion_tokens`.
+5. `ExceptionRecord` (`exceptions`): `id` (UUID PK), `org_id`, `match_id` (FK), `record_id` (FK), `category`, `notes`, `resolved`, `created_at`.
+6. `MetricsSnapshot` (`metrics_snapshots`): `id` (UUID PK), `org_id`, `batch_id` (FK), `records_processed`, `rule_matches`, `ai_verified`, `needs_review`, `match_rate`, `precision`, `recall`, `true_positives`, `false_positives`, `false_negatives`, `ai_accuracy`, `processing_time_seconds`, `manual_hours_saved`.
+7. `FeedbackMemoryRecord` (`feedback_memory`): `id` (UUID PK), `org_id`, `merchant_type`, `order_id`, `discrepancy_pattern`, `original_ai_reason`, `corrected_reason`, `amount_delta`, `evidence_field`, `reviewer_notes`, `reviewer_action`, `confidence_boost`.
+8. `ReconciliationJob` (`reconciliation_jobs`): `id` (UUID PK), `org_id`, `batch_id` (FK), `status`, `stage`, `progress`, `created_at`, `updated_at`, `completed_at`, `result_payload`, `error_message`.
 
-**What happens (only if strict schema fails):**
-1. **Phase 1 — Exact match:** Lowercase column names and check against expected schema
-2. **Phase 2 — Alias dictionary:** 178 known column name variants (e.g., `"txn_amount"` → `"amount"`, `"pmt_date"` → `"settlement_date"`) defined in [`aliases.py`](file:///e:/Razorpay/backend/schema_mapper/aliases.py) (240 lines)
-3. **Phase 3 — AI inference:** If aliases fail, sends column names to LLM (Gemini/OpenAI) and asks "which target column does this map to?" Only accepts mappings with ≥0.95 confidence
+#### `backend/db/session.py`
+- **`get_database_url()`**: Inspects `DATABASE_URL`, normalizes `postgres://` to `postgresql://`, checks discrete `POSTGRES_*` environment variables, and falls back to `sqlite:///./reconpilot.db`.
+- **Engine Setup**: Instantiates SQLAlchemy engine with `pool_pre_ping=True`. If SQLite is detected, configures `connect_args={"check_same_thread": False}`.
+- **`init_db()`**: Executes `Base.metadata.create_all(bind=engine)`. Includes a dynamic migration routine on SQLite to auto-add missing columns (e.g. `org_id`).
+- **`get_db()`**: FastAPI dependency providing transactional session scope with automatic closing.
 
-**Data check:** Mappings below 0.95 confidence are flagged as `"suggested_mappings"` requiring user confirmation. The system does NOT auto-apply low-confidence mappings.
+---
 
-**Flaw:** No headerless CSV support. If the CSV has no header row, everything fails.
+### 2.5 Ingestion, Parsing & Normalization
 
-### Stage 4: Normalization & Cleaning
+#### `backend/parser/csv_parser.py`
+- **`EXPECTED_COLUMNS`**: Specifies canonical schemas:
+  - `invoice`: `invoice_id`, `order_id`, `amount`, `invoice_date`, `customer_name`, `status`.
+  - `settlement`: `settlement_id`, `order_id`, `amount`, `settlement_date`, `reference_number`, `status`, `fees`, `gst`, `tds`.
+  - `bank`: `bank_txn_id`, `txn_date`, `description`, `reference_number`, `amount`, `balance`, `status`.
+- **`BaseCSVParser`**: Abstract parser enforcing `validate_schema()`. Missing required columns raise `SchemaValidationError`.
+- **`SmartCSVParser`**: Automatically maps unknown or merchant-specific column names into canonical schema using `SchemaMapper`.
 
-**Files:**
-- [`backend/normalizer/normalizer.py`](file:///e:/Razorpay/backend/normalizer/normalizer.py) (168 lines)
-- [`backend/normalizer/data_cleaners.py`](file:///e:/Razorpay/backend/normalizer/data_cleaners.py) (189 lines)
+#### `backend/normalizer/data_cleaners.py`
+- **`clean_currency()`**: Extracts numeric amounts from dirty strings, handles rupee symbols (`₹`, `Rs`, `INR`), dollar signs (`$`), localized commas (`12,000.00`), and negative accounting formats (`(120.00)` $\rightarrow$ `-120.00`).
+- **`clean_date()`**: Parses mixed date formats (`%Y-%m-%d`, `%d/%m/%Y`, `%d-%m-%Y`, `%Y/%m/%d`, `%d-%b-%Y`, ISO timestamps) into standard Python `date`.
+- **`clean_reference()`**: Strips non-alphanumeric punctuation from bank UTR numbers (`UTR/2026/08/12345` $\rightarrow$ `UTR20260812345`).
+- **`clean_order_id()`**: Trims whitespace, removes special characters, and preserves order keys.
+- **`clean_status()`**: Normalizes string statuses (`PAID`, `Success`, `captured` $\rightarrow$ `paid`; `Settled` $\rightarrow$ `settled`; `Credit` $\rightarrow$ `credited`).
 
-**What happens per row:**
-1. `normalize_invoice_row()` / `normalize_settlement_row()` / `normalize_bank_row()` converts each CSV row into a `NormalizedRecord` Pydantic model
-2. **Amount cleaning** via `clean_currency()`:
-   - Strips `₹`, `$`, `€`, `£`, `INR`, `USD`, `EUR`, `GBP`, `Rs.`
-   - Removes commas: `"12,000.00"` → `12000.00`
-   - Handles accounting negatives: `"(50.00)"` or `"50.00-"` → `-50.00`
-   - Returns `Decimal` (never `float`)
-3. **Date cleaning** via `clean_date()`:
-   - Tries 20+ format patterns (ISO, DD/MM/YYYY, DD-Mon-YYYY, MM/DD/YY, etc.)
-   - Handles ISO datetime with `T`: `"2026-08-21T14:30:00"` → `2026-08-21`
-   - Handles partial dates: `"21 Aug"` → `2026-08-21` (assumes current year)
-4. **UTR/Reference cleaning** via `clean_reference()`:
-   - Strips spaces, hyphens, slashes, dots
-   - Uppercases: `"UTR/2026/08/12345"` → `"UTR20260812345"`
-5. **Order ID cleaning** via `clean_order_id()`:
-   - Trims whitespace, uppercases
-6. **Status normalization** via `clean_status()`:
-   - Maps `"success"/"captured"/"completed"` → `"paid"`
-   - Maps `"reversed"` → `"refund_processed"`
+#### `backend/normalizer/normalizer.py`
+- **`NormalizedRecord`**: Pydantic schema mapping records to a uniform representation.
+- **`normalize_record()`**: Directs dictionary rows to `normalize_invoice_row`, `normalize_settlement_row`, or `normalize_bank_row`.
+- **`persist_normalized_records()`**: Persists normalized records into the database with duplicate transaction detection (`HTTP 409 Conflict`).
 
-**Data check:** If any amount can't be parsed → defaults to `Decimal("0.00")`. If any date can't be parsed → raises `ValueError`.
+#### `backend/schema_mapper/mapper.py` & `aliases.py`
+- **Confidence Tiers**:
+  - `auto_map` ($\ge 0.95$): Applied automatically with 100% confidence.
+  - `suggest` ($0.80 - 0.94$): Requires user confirmation in UI.
+  - `reject` ($< 0.80$): Safely rejected without guessing.
+- **`COLUMN_ALIASES`**: Pre-seeded dictionary of over 100 common financial column aliases (e.g. `payout_date`, `value_date`, `bank_ref_no`, `utr_number`, `gross_amount`).
 
-### Stage 5: Database Ingestion
+---
 
-**File:** [`backend/normalizer/normalizer.py`](file:///e:/Razorpay/backend/normalizer/normalizer.py) → `persist_normalized_records()`
+### 2.6 Deterministic Rule Engine & Exception Taxonomy (`backend/rules/`)
 
-**What happens:**
-1. Creates a `Batch` row with status `"uploaded"`
-2. Creates `Record` rows for each normalized record with `UniqueConstraint("batch_id", "transaction_id", "source_type")`
-3. Each record gets a UUID primary key, `org_id`, `batch_id`, and all normalized fields; duplicate uploads trigger HTTP 409 Conflict
+#### `backend/rules/rule_engine.py`
+- **Core Pipeline**: `apply_rules_in_order()` applies 7 rules sequentially.
+- **Paisa Rounding**: `round_paisa(val)` quantizes values to `Decimal("0.01")` using `ROUND_HALF_UP`.
+- **Duplicate Detection**: `find_duplicate_order_ids()` detects conflicting order IDs across invoices and routes them to exceptions.
+- **`RuleMatchResult`**: Encapsulates `is_matched`, `rule_name`, `confidence`, and `charge_breakdown`.
 
-### Stage 6: Reconciliation Pipeline
+#### `backend/rules/adjusted_amount.py`
+- **`explain_fixed_schedule_deduction()`**: Derives expected MDR, GST, and TDS based on merchant configuration. Validates both arithmetic balance and compliance with the contractual rate schedule.
 
-**File:** [`backend/services/pipeline.py`](file:///e:/Razorpay/backend/services/pipeline.py) (343 lines) → `process_reconciliation_batch()`
+#### `backend/rules/exception_taxonomy.py`
+- **Taxonomy Structure**: 8 domains, 30+ category definitions.
+- **Metadata**: Each `ExceptionDefinition` defines `category_id`, `domain`, `display_title`, `description`, `suggested_action`, and `financial_impact` (`timing`, `shortfall`, `excess`, `statutory`, `dispute`).
 
-**This is the heart of the system.** Here's what it does:
+---
 
-#### Step 6.1: Load Records
+### 2.7 AI Verification Engine & Math Validator (`backend/ai/`)
+
+#### `backend/ai/engine.py`
+- **`FinanceVerificationOrchestrator`**: Coordinates context assembly, precedent retrieval, LLM execution, math validation, and database audit persistence.
+- **`assemble_context_payload()`**: Injects normalized records, precomputed numeric delta, merchant fee schedule, and matching historical precedents into `USER_PROMPT_TEMPLATE`.
+- **Simulation Fallback**: `_simulate_llm_reasoning()` provides deterministic offline simulation for test suites and offline environments when `RECONPILOT_AI_MODE=offline`.
+
+#### `backend/ai/validator.py`
+- **`validate_finance_verification()`**: Intercepts LLM output and recalculates expected amounts.
+- **Formulas Evaluated**:
+  - `processing_fee`: $Invoice - Settlement.fees == Settlement.amount$
+  - `gst_deduction`: $Invoice - (Settlement.fees + Settlement.gst) == Settlement.amount$
+  - `tds_deduction`: $Invoice - (Settlement.fees + Settlement.gst + Settlement.tds) == Settlement.amount$
+- **Verdicts**: Returns `exact` (99% conf), `rounding` (88% conf), `unconfirmable` (65% conf), or `contradicted` (40% conf).
+
+#### `backend/ai/llm_client.py`
+- **`LLMClient`**: Connects via HTTP to Google Gemini API (`generateContent`) or OpenAI Chat Completions API (`chat/completions`) using `httpx`.
+- **Parameters**: `temperature=0.0`, strict JSON mode (`response_mime_type="application/json"` or `response_format={"type": "json_object"}`).
+- **Retry Logic**: Exponential backoff up to 4 retries for transient HTTP/JSON decode errors.
+- **Budget Ceiling**: Tracks cumulative USD spend. If spend exceeds `AI_SPEND_CEILING_USD`, raises `CostCeilingExceededError`.
+
+#### `backend/ai/feedback_memory.py`
+- **`FeedbackMemoryStore`**: Thread-safe in-memory cache synchronized with the `feedback_memory` database table.
+- **Precedent Lookup**: `find_similar_cases()` matches merchant type and delta corridors ($\pm 20\%$).
+- **Recording**: `record_feedback()` persists human approvals to prevent repetitive review of identical fee patterns.
+
+#### `backend/ai/prompts.py`
+- **`SYSTEM_PROMPT`**: Guides the AI to act as a forensic finance reconciliation engine under Section 194-O, MDR schedules, and GST guidelines.
+- **`USER_PROMPT_TEMPLATE`**: Formats invoice JSON, settlement JSON, bank JSON, and rate card into a structured prompt.
+
+---
+
+### 2.8 Services, Pipeline & Job Queue (`backend/services/`)
+
+#### `backend/services/pipeline.py`
+- **`process_reconciliation_batch()`**: The primary reconciliation pipeline:
+  1. Loads all batch records in a single query.
+  2. Runs the 7-stage deterministic rule engine on each settlement.
+  3. Routes residual misses to the Finance Verification Engine.
+  4. Intercepts AI proposals with the arithmetic validator.
+  5. Executes 3-way gap detection (uncollected invoices & unmatched bank credits).
+  6. Computes confusion matrix and persists `MetricsSnapshot`.
+
+#### `backend/services/job_queue.py`
+- **`JobQueueManager`**: Implements an asynchronous worker pool using `concurrent.futures.ThreadPoolExecutor(max_workers=4)`.
+- **Lifecycle**: `submit_job()` creates a `reconciliation_jobs` record and schedules background execution. `_run_job()` updates progress and stages (`queued` $\rightarrow$ `rule_matching` $\rightarrow$ `ai_micro_batching` $\rightarrow$ `gap_detection` $\rightarrow$ `snapshot` $\rightarrow$ `completed`).
+
+#### `backend/services/metrics.py`
+- **`compute_batch_metrics()`**: Calculates match rate, precision, recall, and manual hours saved ($Records \times 3.0 \text{ min} / 60$).
+
+---
+
+### 2.9 Analytics & Reports (`backend/analytics/`, `backend/reports/`)
+
+#### `backend/analytics/cash_position.py`
+- **`compute_cash_position()`**: Computes book cash balance, pending settlement inflows, pending refund/dispute reserves, expected cash tomorrow, and liquidity health index (0 to 100).
+
+#### `backend/reports/reporter.py`
+- **`generate_reconciliation_csv()`**: Formats reconciliation export containing record IDs, order IDs, confidence, and audit evidence.
+- **`generate_tally_xml()`**: Generates Tally Prime XML `<ENVELOPE>` mapping transactions to Bank Account, Gateway Charges (MDR), Input GST, Discrepancy Suspense, and Gateway Clearing accounts.
+- **`generate_zoho_books_csv()`**: Formats Zoho Books manual journal CSV import schema.
+- **`generate_netsuite_journal_json()`**: Outputs NetSuite SuiteTalk JSON journal entries.
+
+---
+
+### 2.10 Integrations & Adapters (`backend/integrations/`)
+
+#### `backend/integrations/base.py`
+- Abstract contracts: `BaseGatewayAdapter` (gateways), `BaseBankAdapter` (banks), `BaseERPAdapter` (ERPs), `SyncResult`, `IntegrationMode` (`demo`, `production`).
+
+#### `backend/integrations/gateways/razorpay.py`
+- **`RazorpayAdapter`**:
+  - Live Mode: Connects to `https://api.razorpay.com/v1/orders`, `/payments`, and `/settlements` using Basic Auth.
+  - Demo Mode: Triggered by `rzp_test_` keys. Reconciles captured test payments and derives simulated bank statements for sandbox evaluation.
+
+#### `backend/integrations/bank/hdfc.py`
+- **`HDFCBankAdapter`**: Parses commercial HDFC Bank statement feeds into canonical bank records.
+
+#### `backend/integrations/erp/tally.py`
+- **`TallyERPAdapter`**: Ingests Tally sales register exports into canonical invoice records.
+
+#### `backend/integrations/gateways/cashfree.py` & `stripe.py`
+- Extensible adapter stubs for Cashfree AutoCollect and Stripe cross-border settlements.
+
+---
+
+### 2.11 Synthetic Data & Archetypes (`backend/synthetic_data/`)
+
+#### `backend/synthetic_data/merchant_archetypes.py`
+- Defines 10 industry profiles: `restaurant`, `marketplace`, `saas`, `travel`, `healthcare`, `retail`, `gaming`, `education`, `logistics`, `b2b`. Each archetype specifies custom column mappings, date formats, currency styles, ticket ranges, and typical exceptions.
+
+#### `backend/synthetic_data/generator.py`
+- Synthesizes realistic 3-way transaction datasets with randomized amounts, date lag, fees, GST, TDS, and ground-truth validation labels.
+
+---
+
+### 2.12 Evaluation Pipeline (`backend/evaluation/`)
+
+#### `backend/evaluation/score.py`
+- Official evaluation scoring script matching `07-Evaluation-Plan.md`. Runs the reconciliation pipeline on the labeled synthetic batch and calculates unrounded precision, recall, F1 score, and AI decision accuracy.
+
+#### `backend/evaluation/evaluator.py`
+- Helper evaluating confusion matrices and comparison against target thresholds.
+
+#### `backend/evaluation/generate_adversarial_dataset.py`
+- Generates complex edge cases, extreme variance, and multi-anomaly datasets for stress testing.
+
+---
+
+### 2.13 Frontend Architecture (`frontend/`)
+
+- **`frontend/app/page.tsx`**: Main SPA dashboard managing active tabs (`dashboard`, `upload`, `matches`, `exceptions`), batch loading, and modal state.
+- **`frontend/components/CashPositionBanner.tsx`**: Real-time display of confirmed bank balance, pipeline inflows, and expected cash tomorrow.
+- **`frontend/components/MetricsCards.tsx`**: Headline KPI cards (Match rate, Precision, Recall, Hours saved).
+- **`frontend/components/AnalyticsCharts.tsx`**: Recharts resolution distribution donut chart and exception category bar chart.
+- **`frontend/components/UploadPanel.tsx`**: Drag-and-drop CSV upload zone, schema mapping preview, and instant archetype generator.
+- **`frontend/components/MatchTable.tsx`**: Paginated match ledger with status, method, confidence, and amount filtering.
+- **`frontend/components/EvidenceDrawer.tsx`**: Slide-out drawer displaying calculation trace, math validation verdict, model used, tokens, and historical past cases.
+- **`frontend/components/ReviewModal.tsx`**: Human reviewer disposition modal storing audit notes and feedback precedents.
+- **`frontend/components/ExceptionGrid.tsx`**: Domain-based exception taxonomy cards.
+
+---
+
+### 2.14 Test Suite (`tests/`)
+
+The repository contains 25 test files:
+- `test_adapters.py`: Gateway, bank, and ERP adapter sync and normalization tests.
+- `test_adjusted_amount.py`: Deterministic MDR, GST, and TDS fee schedule verification.
+- `test_ai_engine.py`: AI orchestrator, context building, and validator integration tests.
+- `test_ai_live_benchmark.py`: Live unmocked LLM benchmark (`@pytest.mark.live_llm`).
+- `test_api_health.py`: Healthcheck route and database probe tests.
+- `test_auth_tenant.py`: HMAC-SHA256 JWT validation, API keys, and multi-tenant scoping.
+- `test_cash_position.py`: Treasury balance and liquidity index tests.
+- `test_data_cleaners.py`: Currency, date, status, and UTR sanitization tests.
+- `test_erp_export.py`: Tally XML, Zoho CSV, and NetSuite JSON journal validation.
+- `test_evaluation_score.py`: Precision, recall, and confusion matrix tests.
+- `test_feedback_memory.py`: Precedent storage and dynamic confidence boost tests.
+- `test_gap_detection.py`: Uncollected invoice and unmatched bank credit tests.
+- `test_job_queue.py`: ThreadPoolExecutor background job progress tests.
+- `test_live_metrics.py`: Metrics snapshot computation tests.
+- `test_llm_client.py`: LLM client retries, cost calculation, and spend ceiling tests.
+- `test_merchant_archetypes.py`: Validation across all 10 merchant archetypes.
+- `test_micro_batching.py`: Batch slicing and micro-chunk processing tests.
+- `test_parser_and_normalizer.py`: CSV parsing and unified record normalization tests.
+- `test_rules.py`: Comprehensive test suite for all 7 deterministic rules.
+- `test_safe_schema.py`: Safe schema mapping confidence thresholds.
+- `test_scalability_10k.py`: High-volume 10,000-row batch scalability tests.
+- `test_schema_mapper.py`: Column alias matching and remapping tests.
+- `test_security.py`: Rate limiter, stream DOS, and header security tests.
+- `test_synthetic_data.py`: Synthetic generator and scenario label tests.
+- `test_validator.py`: Independent arithmetic validator verdicts (`exact`, `rounding`, `unconfirmable`, `contradicted`).
+
+---
+
+## 3. Data Flow: Ingestion to ERP Export
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User / Client
+    participant API as FastAPI Gateway
+    participant P as SmartCSVParser & Mapper
+    participant DB as Database (SQLAlchemy)
+    participant Pipe as Pipeline Orchestrator
+    participant R as 7-Stage Rule Engine
+    participant AI as Finance Verification Engine
+    participant V as Arithmetic Validator
+    participant ERP as 1-Click ERP Exporter
+
+    U->>API: POST /api/v1/batches (settlement.csv, bank.csv, invoice.csv)
+    API->>API: Verify API Key & Enforce 10MB Stream Limit
+    API->>P: Parse CSV Streams
+    P->>P: Auto-Map Headers (>=95% Confidence)
+    P->>P: Clean Currency, Dates, and UTRs
+    P->>DB: Persist Records (Unique Constraint Check)
+    API->>Pipe: process_reconciliation_batch(batch_id)
+    
+    loop For each Settlement Record
+        Pipe->>R: apply_rules_in_order(inv, settle, bank)
+        alt Rule Match (Rules 1-7)
+            R-->>Pipe: RuleMatchResult (100% Conf)
+            Pipe->>DB: Store Match (method="rule", status="matched")
+        else Rule Miss
+            Pipe->>AI: verify_discrepancy()
+            AI->>V: Intercept Model Output
+            V->>V: Re-derive Paisa Math (Decimal)
+            alt Confirmed (Exact / Rounding)
+                V-->>Pipe: is_valid=True (Conf 99% / 88%)
+                Pipe->>DB: Store Match (method="ai", status="matched")
+            else Unconfirmable / Contradicted
+                V-->>Pipe: is_valid=False (Conf 65% / 40%)
+                Pipe->>DB: Store Exception (status="exception")
+            end
+        end
+    end
+
+    Pipe->>Pipe: Run 3-Way Gap Detection Pass
+    Pipe->>DB: Store Uncollected Invoices & Bank Credits
+    Pipe->>DB: Persist MetricsSnapshot
+    Pipe-->>API: Batch Complete
+    U->>API: GET /api/v1/batches/{id}/erp-journal?format=tally
+    API->>ERP: generate_tally_xml()
+    ERP-->>U: Download Tally Prime XML Voucher
+```
+
+---
+
+## 4. Data Validation & Sanitization Pipeline
+
+Data sanitization occurs before records enter the database:
+
+1. **Stream Boundary Check (`backend/api/routes.py`)**:
+   `_read_validated_file` verifies `upload_file.size <= 10MB` and reads in bounded chunks (`max_size + 1`). Streams exceeding 10MB immediately raise `HTTP 413 Content Too Large`.
+2. **Schema Gating (`backend/schema_mapper/mapper.py`)**:
+   Incoming columns are mapped against canonical schemas. Confidence $\ge 0.95$ triggers auto-mapping; $0.80 - 0.94$ requires user confirmation; $< 0.80$ is safely rejected.
+3. **Data Cleaning (`backend/normalizer/data_cleaners.py`)**:
+   - Currency: Strips symbols (`₹`, `$`, `Rs`), cleans commas, parses negative parentheticals.
+   - Date: Unifies 5 distinct date formats into standard Python `date`.
+   - Reference: Sanitizes UTRs by removing slashes, hyphens, and whitespace.
+   - Status: Normalizes statuses to canonical enums (`paid`, `settled`, `credited`).
+4. **Persistence Integrity (`backend/normalizer/normalizer.py`)**:
+   Records are inserted into the `records` table under a database `UniqueConstraint("batch_id", "transaction_id", "source_type")`. Duplicates abort with `HTTP 409 Conflict`.
+
+---
+
+## 5. The 7-Stage Deterministic Rule Engine: Deep Dive
+
+Implemented in `backend/rules/rule_engine.py`:
+
+### Rule 1: `match_exact_order_id`
+- **Criteria**: `invoice.order_id == settlement.order_id`, `invoice.amount == settlement.amount`, `settlement.status == "settled"`, `invoice.status == "paid"`, date variance $\le 2$ days.
+- **Guard**: Checks `find_duplicate_order_ids()`. If the invoice order ID appears multiple times in the invoice batch, matching is disallowed and the transaction is routed to exceptions.
+- **Confidence**: `100.00%`.
+
+### Rule 2: `match_exact_reference_number`
+- **Criteria**: `settlement.reference_number == bank.reference_number`, `settlement.amount == bank.amount`, `settlement.status == "settled"`, `bank.status == "credited"`.
+- **Confidence**: `100.00%`.
+
+### Rule 3: `match_exact_amount`
+- **Criteria**: `invoice.amount == settlement.amount`, settlement within T+2 days window, no reference number present.
+- **Confidence**: `100.00%`.
+
+### Rule 4: `settlement_date_window`
+- **Criteria**: `invoice.amount == settlement.amount`, settlement date falls within extended corridor (T+3 to T+7 days).
+- **Confidence**: `98.00%` (calibrated for weekend and bank holiday rollover).
+
+### Rule 5: `match_fee_gst_tds_adjusted_amount`
+- **Criteria**: Reconciles contractual fee deductions against configured rate cards:
+  $$Expected Fee = \text{round\_paisa}(Invoice \times MDR)$$
+  $$Expected GST = \text{round\_paisa}(Expected Fee \times GST)$$
+  $$Expected TDS = \text{round\_paisa}(Invoice \times TDS)$$
+  $$Expected Net = Invoice - (Fee + GST + TDS)$$
+- **Guard**: All recorded deductions must agree with rate schedules. Non-standard manual fee adjustments fail this rule and route to AI.
+- **Confidence**: `100.00%`.
+
+### Rule 6: `match_tolerance_amount`
+- **Criteria**: Order IDs match, net difference $0.00 < |Invoice - Settlement| \le ₹2.00$.
+- **Confidence**: `95.00%`.
+
+### Rule 7: `match_fx_spread_tolerance`
+- **Criteria**: International cross-border order (`currency != "INR"` or `intl` in order ID), variance falls within standard currency conversion corridor ($0.5\% \le \Delta / Invoice \le 4.0\%$).
+- **Confidence**: `94.00%`.
+
+---
+
+## 6. Finance Verification Engine & Independent Math Validation
+
+Located in `backend/ai/`:
+
+### Context Assembly (`backend/ai/engine.py`)
+Prepares prompt data without requiring the model to perform mental arithmetic:
+- Injects precomputed numeric delta: `abs(invoice.amount - settlement.amount)`.
+- Injects merchant fee schedule parameters.
+- Retrieves and appends similar historical precedents from Feedback Memory.
+
+### LLM Client (`backend/ai/llm_client.py`)
+- Executes HTTP calls to Google Gemini (`gemini-2.5-pro`) or OpenAI (`gpt-5.6-terra`).
+- Enforces strict JSON schema output with `temperature=0.0`.
+- Implements exponential backoff retries (1s, 2s, 4s, 8s).
+- Tracks token consumption and enforces `AI_SPEND_CEILING_USD` (default \$5.00).
+
+### Independent Arithmetic Validator (`backend/ai/validator.py`)
+The model's output is intercepted before any database write:
 ```python
-records = db.query(Record).filter(Record.batch_id == batch_id).all()
-invoices = [r for r in records if r.source_type == "invoice"]
-settlements = [r for r in records if r.source_type == "settlement"]
-banks = [r for r in records if r.source_type == "bank"]
-```
-Builds lookup dictionaries:
-- `inv_by_order`: invoice keyed by `order_id`
-- `bank_by_utr`: bank record keyed by `reference_number`
-
-#### Step 6.2: Duplicate Detection
-```python
-duplicates = find_duplicate_order_ids(norm_invoices)
-```
-Scans all invoices. If two invoices share the same `order_id`, both are blocked from auto-matching and routed to exceptions.
-
-#### Step 6.3: Settlement-Centric Matching Loop
-The pipeline iterates **over settlements** (not invoices). For each settlement:
-
-1. **Find candidate invoice:** `inv = inv_by_order.get(settle.order_id)`
-2. **Find candidate bank credit:** `bank = bank_by_utr.get(settle.reference_number)`
-3. **Run deterministic rules** via `apply_rules_in_order()`
-4. If rules match → create `Match` row with `match_method="rule"`, `confidence=100%`
-5. If rules miss → send to AI engine
-
-#### Step 6.4: AI Verification (Only for Rule Misses)
-```python
-ai_res = verify_discrepancy(invoice=inv, settlement=settle, bank=bank, db=db, match_id=match_id)
-```
-- If AI validates (confidence ≥ 80%) → create `Match` with `match_method="ai"`
-- If AI fails → create `Match` with `status="exception"`
-
-#### Step 6.5: Exception Classification
-For every exception, the pipeline assigns one of 10+ categories based on:
-- `settlement_delay` — if status is "pending"
-- `refund_pending` — if invoice is refunded or bank amount is negative
-- `duplicate_invoice` — if order_id is in duplicates set
-- `missing_credit` — if bank credit doesn't exist
-- `chargeback` / `escrow_hold` / `fraud_hold` / `tds_revision` / `settlement_holiday` — from AI reason
-- `cost_ceiling_exceeded` — if AI budget was exceeded
-- `unknown_discrepancy` — catch-all
-
-#### Step 6.6: 3-Way Gap Detection
-After the main loop, scans for:
-1. **Uncollected invoices:** Paid invoices with no corresponding settlement
-2. **Unmatched bank credits:** Bank credits with no corresponding settlement
-
-These create additional exception records.
-
-#### Step 6.7: Metrics Snapshot
-Computes and persists: `records_processed`, `rule_matches`, `ai_verified`, `needs_review`, `match_rate`, `precision`, `recall`, `true_positives`, `false_positives`, `false_negatives`, `ai_accuracy`, `processing_time_seconds`, `manual_hours_saved`.
-
-### Stage 7: Frontend Display
-
-**File:** [`frontend/app/page.tsx`](file:///e:/Razorpay/frontend/app/page.tsx) (366 lines)
-
-After batch processing, the frontend calls 4 parallel API requests:
-1. `GET /api/v1/batches/{id}` → metrics data
-2. `GET /api/v1/batches/{id}/matches?limit=100` → match ledger
-3. `GET /api/v1/batches/{id}/cash-position` → treasury analytics
-4. `GET /api/v1/batches/{id}/exceptions` → exception report
-
-These populate the KPI cards, match table, evidence drawers, and exception grid.
-
----
-
-## 4. File-by-File Breakdown
-
-### Backend Core (what each file actually does)
-
-| File | Lines | What It Actually Does | Why It Exists |
-|---|---|---|---|
-| [`main.py`](file:///e:/Razorpay/backend/main.py) | 65 | FastAPI app, safe CORS (`http://localhost:3000`), rate limiter, structured logging, CSRF note | Entry point |
-| [`logging_config.py`](file:///e:/Razorpay/backend/logging_config.py) | 35 | Centralized structured logging with uniform timestamps, levels, and module tracing | Observability |
-| [`db/models.py`](file:///e:/Razorpay/backend/db/models.py) | 225 | Defines 8 ORM tables: `Batch`, `Record`, `Match`, `AIVerification`, `ExceptionRecord`, `MetricsSnapshot`, `FeedbackMemoryRecord`, `ReconciliationJob` (with `UniqueConstraint` on `Record`) | Database schema |
-| [`db/session.py`](file:///e:/Razorpay/backend/db/session.py) | 51 | Creates SQLAlchemy engine (PostgreSQL or SQLite), session factory, `init_db()` | DB connection |
-| [`migrations/`](file:///e:/Razorpay/backend/migrations) | — | Alembic migration framework (`alembic.ini`, `env.py`, versioned migration scripts) | Schema evolution |
-| [`parser/csv_parser.py`](file:///e:/Razorpay/backend/parser/csv_parser.py) | 317 | `InvoiceParser`, `SettlementParser`, `BankStatementParser` + `SmartCSVParser` with schema mapping integration | Read & validate CSV files |
-| [`normalizer/normalizer.py`](file:///e:/Razorpay/backend/normalizer/normalizer.py) | 175 | `NormalizedRecord` model + `normalize_invoice_row()`, `normalize_settlement_row()`, `normalize_bank_row()`, `normalize_dataframe()`, `persist_normalized_records()` with unique violation catches | Convert raw CSV into clean typed records |
-| [`normalizer/data_cleaners.py`](file:///e:/Razorpay/backend/normalizer/data_cleaners.py) | 189 | `clean_currency()` (strips ₹, commas, handles negatives), `clean_date()` (20+ formats), `clean_reference()` (strips hyphens, uppercases), `clean_order_id()`, `clean_status()` (maps "success"→"paid") | Handle dirty real-world data formats |
-| [`schema_mapper/mapper.py`](file:///e:/Razorpay/backend/schema_mapper/mapper.py) | 306 | 3-phase column mapping: exact → 178 aliases → AI with ≥0.95 gating | Handle non-standard CSV column names |
-| [`schema_mapper/aliases.py`](file:///e:/Razorpay/backend/schema_mapper/aliases.py) | 240 | Dictionary of 178 known column name variants | Alias lookup |
-| [`config/fee_rules.py`](file:///e:/Razorpay/backend/config/fee_rules.py) | 84 | `FeeConfig` Pydantic model (mdr, gst, tds, platform_fee, convenience_fee, settlement_delay_days) + `load_fee_config()` from JSON/dict/string/profile name | Make fee rates configurable per merchant |
-| [`rules/rule_engine.py`](file:///e:/Razorpay/backend/rules/rule_engine.py) | 415 | 7 matching functions + `apply_rules_in_order()` orchestrator + `find_duplicate_order_ids()` (differentiated Rule 4 for extended T+7 window) | Deterministic matching — the core engine |
-| [`rules/adjusted_amount.py`](file:///e:/Razorpay/backend/rules/adjusted_amount.py) | 100 | `validate_adjusted_amount()` — verifies that recorded fees/gst/tds match the expected rate card | Statutory compliance check |
-| [`rules/exception_taxonomy.py`](file:///e:/Razorpay/backend/rules/exception_taxonomy.py) | 342 | 30+ `ExceptionDefinition` objects across 8 domains, each with category_id, description, suggested_action, financial_impact | Standardize exception types |
-| [`ai/engine.py`](file:///e:/Razorpay/backend/ai/engine.py) | 627 | `FinanceVerificationOrchestrator` class: context assembly → feedback memory → LLM call → validator → audit persistence. Strict `disable_simulation_fallback` support + cluster micro-batching | AI verification for rule misses |
-| [`ai/validator.py`](file:///e:/Razorpay/backend/ai/validator.py) | 100 | `validate_finance_verification()`: independently recalculates `invoice - fees - gst - tds == settlement`. Assigns confidence: 99% (exact) / 88% (rounding) / 65% (unconfirmable) / 40% (contradicted). **Never trusts model's self-reported score.** | Safety anchor — prevents AI hallucination from becoming a ledger entry |
-| [`ai/llm_client.py`](file:///e:/Razorpay/backend/ai/llm_client.py) | 249 | `LLMClient`: multi-provider (Gemini + OpenAI), `temperature=0.0`, strict JSON schema, exponential backoff retry for HTTP 429, per-call cost tracking, `AI_SPEND_CEILING_USD` budget cap | LLM gateway with cost control |
-| [`ai/prompts.py`](file:///e:/Razorpay/backend/ai/prompts.py) | 21 | `SYSTEM_PROMPT` + `USER_PROMPT_TEMPLATE` with closed enum of 7 `likely_reason` values | Constrain LLM output to valid JSON schema |
-| [`ai/feedback_memory.py`](file:///e:/Razorpay/backend/ai/feedback_memory.py) | 146 | `FeedbackMemoryStore`: finds historical human corrections similar to current case by merchant type, amount magnitude, fee delta | Active learning from human reviews |
-| [`services/pipeline.py`](file:///e:/Razorpay/backend/services/pipeline.py) | 385 | `process_reconciliation_batch()`: rule matching → AI → exceptions → gap detection → metrics, with structured logging | Pipeline coordination |
-| [`services/job_queue.py`](file:///e:/Razorpay/backend/services/job_queue.py) | 185 | `JobQueueManager` with `ThreadPoolExecutor(4)` and DB persistence (`ReconciliationJob`) surviving server restarts | Handle large batches without blocking the API |
-| [`services/metrics.py`](file:///e:/Razorpay/backend/services/metrics.py) | 81 | `compute_batch_metrics()`: calculates precision, recall, F1, match rate, hours saved from confusion matrix | Scoring |
-| [`analytics/cash_position.py`](file:///e:/Razorpay/backend/analytics/cash_position.py) | 126 | `compute_cash_position()`: bank balance, pending settlements, refund reserves, next-day projections, liquidity health index | Treasury analytics |
-| [`reports/reporter.py`](file:///e:/Razorpay/backend/reports/reporter.py) | 267 | `generate_reconciliation_csv()`, `generate_tally_xml()` (Tally Prime XML), `generate_zoho_books_csv()`, `generate_netsuite_journal_json()` | ERP journal exports |
-| [`api/routes.py`](file:///e:/Razorpay/backend/api/routes.py) | 735 | 16+ REST endpoints with 10MB bounded upload streams (HTTP 413), duplicate conflict mapping (HTTP 409), and single-query batch map lookups | HTTP API layer |
-| [`api/auth.py`](file:///e:/Razorpay/backend/api/auth.py) | 137 | HMAC-SHA256 JWT: `create_access_token()`, `decode_access_token()`, `verify_api_key()`, `get_current_tenant()` | Authentication & multi-tenant |
-| [`api/rate_limiter.py`](file:///e:/Razorpay/backend/api/rate_limiter.py) | 39 | Sliding window rate limiter: 120 requests/minute per IP | Abuse prevention |
-| [`api/schemas.py`](file:///e:/Razorpay/backend/api/schemas.py) | 84 | Pydantic request/response models for API endpoints | API contracts |
-| [`synthetic_data/generator.py`](file:///e:/Razorpay/backend/synthetic_data/generator.py) | 1,259 | Generates 100-record datasets with 10 scenario types and ground truth labels | Test data |
-| [`synthetic_data/merchant_archetypes.py`](file:///e:/Razorpay/backend/synthetic_data/merchant_archetypes.py) | 494 | 11 merchant profiles with industry-specific fee rates, order ID patterns, settlement windows | Multi-merchant support |
-| [`evaluation/score.py`](file:///e:/Razorpay/backend/evaluation/score.py) | 483 | Automated benchmark runner: generates data → runs pipeline → computes confusion matrix | Evaluation harness |
-
----
-
-## 5. How We Check and Validate Data
-
-### Layer 1: Schema Validation (csv_parser.py)
-**What:** Checks that CSV has all required columns  
-**How:** String comparison of column names against `EXPECTED_COLUMNS` dict  
-**When it fails:** `SchemaValidationError` with list of missing columns  
-
-### Layer 2: Type Coercion (data_cleaners.py)
-**What:** Converts raw strings to typed values  
-**How:** `clean_currency()` returns `Decimal`, `clean_date()` returns `date`, etc.  
-**When it fails:** Amount defaults to `0.00`, date raises `ValueError`  
-
-### Layer 3: Duplicate Detection (rule_engine.py)
-**What:** Finds order_ids appearing in multiple invoices  
-**How:** `find_duplicate_order_ids()` — single pass through invoice list  
-**What happens:** Duplicates are blocked from auto-matching and routed to exceptions  
-
-### Layer 4: Deterministic Rule Matching (rule_engine.py)
-**What:** 7 ordered rules that each try to match a settlement to an invoice/bank record  
-**How each rule checks data:**
-
-| Rule | What It Checks | Confidence |
-|---|---|---|
-| **R1: Exact Order ID** | `invoice.order_id == settlement.order_id` AND `invoice.amount == settlement.amount` AND both have correct status AND date within T+2 | 100% |
-| **R2: Exact UTR** | `settlement.reference_number == bank.reference_number` AND `settlement.amount == bank.amount` AND both have correct status | 100% |
-| **R3: Exact Amount** | `invoice.amount == settlement.amount` AND correct statuses AND immediate date within T+2 | 100% |
-| **R4: Extended Date Window** | `invoice.amount == settlement.amount` across extended settlement corridor (T+3 to T+7 days) for delayed ACH credits | 98% |
-| **R5: Fee Schedule** | Calculates `expected_fee = invoice.amount * 0.02`, `expected_gst = fee * 0.18`, `expected_tds = invoice.amount * 0.01`. Checks if settlement's recorded fees match these exact rates. Then checks `invoice.amount - fees - gst - tds == settlement.amount` | 100% |
-| **R6: Tolerance** | `abs(invoice.amount - settlement.amount) ≤ ₹2.00` with matching order_ids | 95% |
-| **R7: FX Spread** | `0.5% ≤ abs(delta / invoice.amount) ≤ 4.0%` with matching order_ids | 94% |
-
-### Layer 5: AI Arithmetic Validator (validator.py)
-**What:** After AI proposes a reason for the discrepancy, validator re-derives the math independently  
-**How:**
-```python
-# For "processing_fee":
-deduction = settlement.fees
 independently_expected = invoice.amount - deduction
-# Check: abs(independently_expected - settlement.amount) ≤ ₹0.01?
+reconciliation_error = abs(independently_expected - settlement.amount)
+```
+- **`exact`**: Error $\le ₹0.01$. Status: `matched`, Adjusted Confidence: `99.00%`, `requires_human_review = False`.
+- **`rounding`**: Error $\le ₹2.00$. Status: `matched`, Adjusted Confidence: `88.00%`, `requires_human_review = False`.
+- **`unconfirmable`**: Plausible non-equation claim (`settlement_delay`, `partial_refund`, `duplicate`). Status: `exception`, Adjusted Confidence: `65.00%`, `requires_human_review = True`.
+- **`contradicted`**: Math fails or contradicts record amounts. Status: `exception`, Adjusted Confidence: `40.00%`, routed as `unknown_discrepancy`.
+
+---
+
+## 7. Active Feedback Memory Store & Precedent Learning
+
+Implemented in `backend/ai/feedback_memory.py`:
+
+```
+┌────────────────────────────────┐
+│   Human Controller Resolves    │
+│    Exception in Dashboard      │
+└───────────────┬────────────────┘
+                │
+                ▼
+┌────────────────────────────────┐
+│   POST /matches/{id}/review    │
+│ (reviewer_note, corrected_cat) │
+└───────────────┬────────────────┘
+                │
+                ▼
+┌────────────────────────────────┐
+│      feedback_memory Table     │
+│  - merchant_type               │
+│  - amount_delta                │
+│  - corrected_reason            │
+│  - reviewer_action             │
+└───────────────┬────────────────┘
+                │
+                ▼ Future Discrepancies
+┌────────────────────────────────┐
+│     find_similar_cases()       │
+│ - Matches merchant type        │
+│ - Filters delta (±20% range)   │
+│ - Injects into LLM prompt      │
+│ - Boosts confidence (+5.00%)   │
+└────────────────────────────────┘
 ```
 
-**Possible outcomes:**
-| Outcome | Condition | Confidence | Action |
-|---|---|---|---|
-| `exact` | Math checks out to the paisa | 99% | Auto-match |
-| `rounding` | Math within ₹2.00 | 88% | Auto-match |
-| `unconfirmable` | Reason has no formula (e.g., "settlement_delay") | 65% | Human review |
-| `contradicted` | Math fails | 40% | Exception |
-
-### Layer 6: Ground Truth Comparison (pipeline.py + score.py)
-**What:** If ground truth labels are provided (from synthetic generator), computes confusion matrix  
-**How:** For each settlement, compares the pipeline's decision (rule/ai/exception) against `expected_resolution` label  
-
 ---
 
-## 6. Current Flaws — Complete List
+## 8. Database Schema, Indexing & Multi-Tenancy
 
-### Active Existing Flaws & Technical Debt (Open)
+Implemented in `backend/db/models.py`:
 
-The following table reflects ONLY the **active/unresolved** gaps and architectural backlog items currently remaining in the codebase:
-
-| # | Flaw / Gap | Severity | Where | Impact | How To Fix |
-|---|---|---|---|---|---|
-| 1 | **No live deployment** | Medium | Infrastructure | Can't show a public cloud running demo | Deploy backend to Railway/Render, frontend to Vercel (Docker containers validated) |
-| 2 | **Partial settlement** | Medium | Rule engine + pipeline | Multi-tranche settlements not modeled | Deferred per `01-PRD.md §6` and `AGENTS.md` non-negotiable MVP freeze; scheduled for v2 roadmap |
-| 3 | **No CSV encoding detection** | Low | `csv_parser.py` | Non-UTF-8 files silently corrupt | Add `chardet` encoding sniffer |
-| 4 | **No headerless CSV support** | Low | `mapper.py` | Headerless files fail schema mapping | Add `header=None` heuristic fallback |
-| 5 | **No ambiguous multi-match scoring** | Low | `rule_engine.py` | Two invoices with same amount/date could be wrong-matched | Add weighted candidate ranking |
-| 6 | **No OpenAPI/Swagger customization** | Low | `main.py` | Missing API docs grouping and examples | Add `openapi_tags` and response examples |
-
----
-
-### Resolved Vulnerabilities & Engineering Hardening (Closed — 15 Issues)
-
-All 15 previously identified Critical, High, and Medium vulnerabilities and technical debt items have been fully resolved, implemented, and verified in the test suite:
-
-| Flaw ID | Area | Where | Resolution Details |
-|---|---|---|---|
-| **C1** | **Live AI Benchmark** | `tests/test_ai_live_benchmark.py` | Added dedicated `test_ai_live_benchmark.py` running in strict `disable_simulation_fallback=True` mode, asserting `is_simulated == False` with token/cost tracking and audit persistence. |
-| **C2** | **CI/CD Pipeline** | `.github/workflows/ci.yml` | Automated GitHub Actions CI pipeline running backend tests with coverage (`pytest-cov`), Next.js frontend production build, and dual Docker container validation. |
-| **H1** | **Upload Size Limit** | `backend/api/routes.py` | Added `_read_validated_file()` checking `upload_file.size > MAX_FILE_SIZE_BYTES` before reading stream and using bounded chunk reads (`MAX_FILE_SIZE_BYTES + 1`), returning HTTP 413. |
-| **H2** | **CORS Origin Security** | `backend/main.py` | Replaced wildcard `["*"]` fallback with safe default `["http://localhost:3000"]`. |
-| **H3** | **Unique Constraint on Records** | `backend/db/models.py` | Added `UniqueConstraint("batch_id", "transaction_id", "source_type")` and wrapped persistence to raise HTTP 409 Conflict on duplicates. |
-| **H4** | **N+1 Query Elimination** | `backend/api/routes.py` | Verified `get_batch_matches` and `get_match_detail` use single-query `in_()` map lookups (zero N+1 query loops). |
-| **H5** | **Rule 3 & 4 Corridor Differentiation** | `backend/rules/rule_engine.py` | Differentiated Rule 4 to cover extended settlement window (T+3 to T+7) at calibrated 98% confidence, complementing Rule 3's immediate T+2 window. |
-| **M1** | **Duplicate Data Folders** | `backend/synthetic_data/` | Consolidated all datasets into canonical `backend/synthetic_data/`, deleted legacy `backend/synthetic-data/`, and updated all code/test references. |
-| **M2** | **Dead Code Removal** | `backend/ai/verifier.py` | Deleted dead file `backend/ai/verifier.py` (86 lines). Zero imports or references existed. |
-| **M3** | **Structured Logging** | `backend/logging_config.py` | Added centralized `logging_config.py` with standard formatting, timestamps, log levels, and module tracing across core services. |
-| **M4** | **CSRF Protection Rationale** | `backend/main.py` | Documented architectural rationale: ReconPilot uses stateless Bearer/API-key headers; no ambient cookie state exists (OWASP compliant). |
-| **M6** | **Alembic Database Migrations** | `backend/migrations/` | Scaffolded Alembic migration framework (`alembic.ini`, `env.py`, template scripts) and autogenerated initial schema revision. |
-| **M7** | **Frontend API URL Configuration** | `frontend/lib/api.ts` | Created `API_BASE_URL` resolver reading `NEXT_PUBLIC_API_URL` with `.env.local` fallback, replaced all hardcoded URLs. |
-| **M8** | **Persistent Job Queue** | `backend/services/job_queue.py` | Added `ReconciliationJob` ORM table and DB persistence in `backend/services/job_queue.py`, allowing background jobs to survive restarts. |
-| **M9** | **Test Coverage Measurement** | `pytest.ini`, `.github/workflows/ci.yml` | Added `--cov=backend --cov-report=term-missing` to `pytest.ini` and XML artifact export in GitHub Actions CI, verifying **78% line coverage**. |
-
----
-
-## 7. What Needs To Change For Real Data
-
-### Problem 1: Real Razorpay CSVs have different column names
-
-**Current expected columns:**
+### Multi-Tenancy Partitioning
+All entities contain an `org_id` column indexed via `idx_<table_name>_org_id`. Multi-tenant queries filter by tenant partition key:
 ```python
-"settlement": ["settlement_id", "order_id", "amount", "settlement_date", "reference_number", "status", "fees", "gst", "tds"]
+query = db.query(Match).filter(Match.batch_id == batch_id, Match.org_id == tenant_id)
 ```
 
-**Real Razorpay settlement report columns:**
-```
-Payment ID, Order ID, Type, Method, Amount, Fee, Tax, Settlement Amount, Settlement Date, Settlement ID, UTR
-```
+### Key Table Indexes
+- `records`: `idx_records_batch_source`, `idx_records_order_id`, `idx_records_reference_number`, `idx_records_org_id`.
+- `matches`: `idx_matches_batch_status`, `idx_matches_org_id`.
+- `exceptions`: `idx_exceptions_category`, `idx_exceptions_org_id`.
+- `feedback_memory`: `idx_feedback_merchant_pattern`, `idx_feedback_corrected_reason`, `idx_feedback_org_id`.
+- `reconciliation_jobs`: `idx_jobs_batch_id`, `idx_jobs_status`, `idx_jobs_org_id`.
 
-**Fix:** The schema mapper with 178 aliases already handles most of these. But we need to add:
-- `"Payment ID"` → `"settlement_id"` (or `"transaction_id"`)
-- `"Fee"` → `"fees"`
-- `"Tax"` → `"gst"`
-- `"Settlement Amount"` → `"amount"` (this is the net amount)
-- `"UTR"` → `"reference_number"`
+---
 
-**Important:** In real Razorpay data, `Amount` = gross amount and `Settlement Amount` = net amount. Our current schema treats `amount` as the net (settlement) amount. This mapping needs to be explicit.
+## 9. Asynchronous Background Job Queue
 
-### Problem 2: Real bank statements bury UTR in description
+Implemented in `backend/services/job_queue.py`:
 
-**Current:** Bank CSV has a clean `reference_number` column  
-**Real:** Bank statement has a `description` field like:
-```
-"NEFT/RAZORPAY/UTR2026080012345/SETTLEMENT PAYOUT"
-"RTGS-CMS-UTR2026080012345-RAZORPAY SOFTWARE"
-"BY TRANSFER-INB-UTR 2026/08/0012345"
-```
+- **Concurrency Model**: `ThreadPoolExecutor(max_workers=4, thread_name_prefix="recon-worker")`.
+- **State Management**: Thread-safe in-memory `JobProgress` dictionary synchronized with database `reconciliation_jobs` records.
+- **Stage Progression**:
+  1. `queued` (0%)
+  2. `initializing` (10%)
+  3. `rule_matching` (30%)
+  4. `ai_micro_batching` (60%)
+  5. `gap_detection` (80%)
+  6. `snapshot` (95%)
+  7. `completed` (100%)
+- **API Interaction**:
+  - `POST /api/v1/reconciliation/jobs`: Submits batch, returns `job_id`.
+  - `GET /api/v1/reconciliation/jobs/{job_id}`: Polls real-time progress without blocking ASGI worker threads.
 
-**Fix:** Add a regex extraction function:
+---
+
+## 10. REST API Layer, Rate Limiting & Security Safeguards
+
+Implemented in `backend/api/`:
+
+### Rate Limiting (`backend/api/rate_limiter.py`)
+- Middleware tracks IP hit rates in a 60-second sliding window.
+- Exceeding 120 requests/minute returns `HTTP 429 Too Many Requests`. Health check routes (`/health`, `/api/v1/health`) and OpenAPI docs (`/docs`) are explicitly exempted.
+
+### Authentication (`backend/api/auth.py`)
+- `verify_api_key`: Checks `X-API-Key` or `Authorization: Bearer <key>`.
+- `get_current_tenant`: Resolves organization context from JWT payload or `X-Tenant-ID`.
+
+### N+1 Query Optimization (`backend/api/routes.py`)
+In `GET /api/v1/batches/{batch_id}/matches`:
+Instead of loading records per match in a loop, all record IDs for the paginated slice are collected and pre-fetched in a single database query:
 ```python
-def extract_utr_from_description(description: str) -> Optional[str]:
-    patterns = [
-        r'UTR[\s/:-]?(\d{10,20})',
-        r'UTR[\s/:-]?(\d{4}/\d{2}/\d+)',
-        r'NEFT/[^/]+/([\w\d]+)',
-    ]
-    # ... try each pattern, clean_reference() the result
+record_map = {r.id: r for r in db.query(Record).filter(Record.id.in_(record_ids)).all()}
 ```
 
-### Problem 3: Real amounts have paisa-level rounding differences
+---
 
-**Current:** Generator produces exact calculated amounts  
-**Real:** Razorpay may round `₹200.004` to `₹200.00` while the merchant's ERP rounds to `₹200.01`
+## 11. Error Handling & Resilience Architecture
 
-**Fix:** Rule 6 (tolerance ≤ ₹2.00) already handles this. But the tolerance should be tighter for fee reconciliation — maybe ≤ ₹0.05 for fee-level checks and ≤ ₹2.00 for gross-level checks.
+| HTTP Status | Error Scenario | Triggering Condition |
+| :--- | :--- | :--- |
+| **`400 Bad Request`** | Unparseable CSV / Missing Batch ID | Empty file, corrupted CSV format, or missing required payload keys. |
+| **`401 Unauthorized`** | Missing or Invalid Credentials | Missing or incorrect API key, expired or tampered JWT signature. |
+| **`404 Not Found`** | Resource Missing | Batch ID, Match ID, or Job ID does not exist in the database. |
+| **`409 Conflict`** | Duplicate Ingestion | Transaction ID collision within the same batch and source type. |
+| **`413 Content Too Large`** | Stream DOS Protection | Uploaded file size exceeds `MAX_FILE_SIZE_BYTES = 10MB`. |
+| **`422 Unprocessable`** | Schema Validation Failure | Required CSV columns missing and unmappable by `SchemaMapper`. |
+| **`429 Rate Limit Exceeded`** | Rate Limit Breach | Client IP exceeds 120 requests within a 60-second window. |
 
-### Problem 4: Settlements can span multiple days
-
-**Current:** Generator creates settlements within T+2  
-**Real:** Weekend settlements, banking holidays, NEFT cutoff times can push to T+5 or more
-
-**Fix:**
-1. Increase `max_days` in `FeeConfig.settlement_delay_days`
-2. Add a business-day calendar that excludes Indian banking holidays
-3. The `settlement_delay` exception category already handles this — just need better thresholds
-
-### Problem 5: One invoice can have multiple settlements (partial payouts)
-
-**Current:** 1:1 mapping between invoice and settlement  
-**Real:** A ₹50,000 invoice might be settled in two tranches: ₹30,000 on Day 1 and ₹20,000 on Day 3
-
-**Fix:** This requires the most significant architectural change:
-1. Add a `remaining_balance` tracker per `order_id`
-2. Allow multiple `Match` rows pointing to the same `invoice_record_id`
-3. Only mark invoice as "fully reconciled" when remaining balance ≤ ₹0.01
-4. This is a **high-effort** change
+### AI Failure Resilience
+If live LLM calls fail after 4 retries or breach the spend ceiling:
+- The orchestrator falls back to deterministic simulation if available, or
+- Marks the record as an unconfirmed exception (`cost_ceiling_exceeded` or `unknown_discrepancy`), ensuring zero unhandled pipeline crashes.
 
 ---
 
-## 8. Test Coverage — What's Tested, What's Not
+## 12. Verified Engineering Limitations & Boundary Conditions
 
-### What IS Tested (28 suites, 97 passed tests, 78% line coverage)
-
-| Area | Test File | What It Verifies |
-|---|---|---|
-| Live LLM benchmark | `test_ai_live_benchmark.py` | Strict `disable_simulation_fallback=True`, token/cost accounting, real Gemini/OpenAI evaluation |
-| 7-rule engine | `test_rules.py` (191 lines) | All 7 rules with positive/negative cases, Rule 4 T+7 window, duplicate detection |
-| AI engine | `test_ai_engine.py` (197 lines) | Simulation output, context assembly, clustered batching |
-| Arithmetic validator | `test_validator.py` (44 lines) | exact/rounding/unconfirmable/contradicted outcomes |
-| CSV parsing | `test_parser_and_normalizer.py` (233 lines) | Schema validation, type coercion, error handling, unique constraints |
-| Data cleaning | `test_data_cleaners.py` (58 lines) | Currency stripping, date parsing, status mapping |
-| Schema mapping | `test_schema_mapper.py` (84 lines) | Alias resolution, AI fallback |
-| Fee adjustment | `test_adjusted_amount.py` (52 lines) | Statutory rate card validation |
-| FX matching | `test_fx_rules.py` (45 lines) | FX spread corridor |
-| Tolerance | `test_tolerance_matching.py` (63 lines) | Penny rounding band |
-| Gap detection | `test_gap_detection.py` (104 lines) | Uncollected invoices, unmatched bank credits |
-| Feedback memory | `test_feedback_memory.py` (71 lines) | Similarity matching, precedent retrieval |
-| Micro-batching | `test_micro_batching.py` (64 lines) | Cluster grouping, representative selection |
-| ERP exports | `test_erp_export.py` (77 lines) | Tally XML, Zoho CSV, NetSuite JSON structure |
-| Cash position | `test_cash_position.py` (78 lines) | Treasury snapshot calculations |
-| Auth & tenancy | `test_auth_tenant.py` (53 lines) | JWT lifecycle, signature validation |
-| Security | `test_security.py` (74 lines) | Upload size limits (HTTP 413), injection prevention |
-| Scalability | `test_scalability_10k.py` (27 lines) | 10,000 record processing |
-| Multi-merchant | `test_multi_merchant.py` (62 lines) | Cross-archetype evaluation across 11 profiles |
-| LLM client | `test_llm_client.py` (129 lines) | Provider selection, retry, cost tracking |
-| Job queue | `test_job_queue.py` (24 lines) | DB-backed async job submission and progress |
-| API health & CORS | `test_api_health.py` (21 lines) | Health endpoint, safe CORS preflight |
-
-### Remaining Testing Gaps (Future Roadmap)
-
-| Gap | Impact | Why It Matters | Status |
-|---|---|---|---|
-| **No end-to-end integration test** | The full pipeline is tested unit-by-unit rather than a single 100-record API upload flow | A breaking change in any middle layer won't be caught | Open |
-| **No concurrent upload stress test** | Unknown behavior with 10 simultaneous uploads | Race conditions on batch creation possible | Open |
-| **No encoding edge case tests** | Only UTF-8 tested | Latin-1/Windows-1252 files would fail silently | Open |
-
----
-
-*This document should be updated whenever a new file is added, a flaw is fixed, or the data pipeline changes.*
+1. **Commercial Banking Feeds**:
+   Payment gateways provide programmatic REST APIs, but Indian commercial banks (HDFC, ICICI, SBI) restrict automated access to host-to-host SFTP batch networks. Direct statement imports currently process CSV/ASCII feeds.
+2. **Unstructured PDF Statements**:
+   ReconPilot requires structured CSV, JSON, or XML feeds. Scanned or non-searchable PDF bank statements require optical table pre-extraction.
+3. **Database Dialect Parity**:
+   The engine supports SQLite for local testing and PostgreSQL for production. SQLite lacks native `JSONB` indexing and concurrent write pooling. Production deployments should use PostgreSQL 16 Alpine.
+4. **Memory Allocation**:
+   The in-memory rate limiter and feedback store cache are local to each ASGI process. Multi-node horizontal scaling requires Redis-backed shared memory.
