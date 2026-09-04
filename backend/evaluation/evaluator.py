@@ -50,6 +50,9 @@ class CrossMerchantEvaluationResult(BaseModel):
     merchant_reports: Dict[str, MerchantEvaluationReport]
 
 
+from backend.services.metrics import compute_batch_metrics
+
+
 def calculate_metrics(
     total_records: int,
     true_positives: Optional[int] = None,
@@ -64,52 +67,35 @@ def calculate_metrics(
 ) -> EvaluationMetrics:
     """
     Computes standard reconciliation evaluation metrics matching 07-Evaluation-Plan.md.
-    When ground-truth is provided (true_positives / false_positives are not None),
-    computes precision, recall, and ai_accuracy against ground truth.
-    When ground-truth is unavailable (None), leaves precision / recall / etc. as None (null).
+    Delegates to canonical compute_batch_metrics service.
     """
-    matched = rule_matches + ai_verified
-    match_rate = (matched / total_records * 100.0) if total_records > 0 else 0.0
-    
-    if true_positives is not None and false_positives is not None:
-        total_eval_matched = true_positives + false_positives
-        precision = (true_positives / total_eval_matched * 100.0) if total_eval_matched > 0 else 100.0
-    else:
-        precision = None
-
-    if true_positives is not None and false_negatives is not None:
-        total_actual_positives = true_positives + false_negatives
-        recall = (true_positives / total_actual_positives * 100.0) if total_actual_positives > 0 else 100.0
-    else:
-        recall = None
-
-    if ai_correct is not None and ai_total is not None and ai_total > 0:
-        ai_accuracy = (ai_correct / ai_total * 100.0)
-    elif ai_total == 0:
-        ai_accuracy = 100.0
-    else:
-        ai_accuracy = None
-
-    # Assumed 3 minutes per manual reconciliation record baseline
-    manual_minutes_baseline = total_records * 3.0
-    residual_review_minutes = exceptions * 3.0 + (processing_time_seconds / 60.0)
-    manual_hours_saved = max(0.0, (manual_minutes_baseline - residual_review_minutes) / 60.0)
-
-    return EvaluationMetrics(
+    res = compute_batch_metrics(
         total_records=total_records,
-        matched_count=matched,
-        rule_matches_count=rule_matches,
-        ai_verified_count=ai_verified,
-        exceptions_count=exceptions,
-        match_rate=round(match_rate, 2),
-        precision=round(precision, 2) if precision is not None else None,
-        recall=round(recall, 2) if recall is not None else None,
         true_positives=true_positives,
         false_positives=false_positives,
         false_negatives=false_negatives,
-        ai_verification_accuracy=round(ai_accuracy, 2) if ai_accuracy is not None else None,
-        manual_hours_saved=round(manual_hours_saved, 2),
-        processing_time_seconds=round(processing_time_seconds, 2),
+        rule_matches=rule_matches,
+        ai_verified=ai_verified,
+        exceptions=exceptions,
+        ai_correct=ai_correct,
+        ai_total=ai_total,
+        processing_time_seconds=processing_time_seconds,
+    )
+    return EvaluationMetrics(
+        total_records=res.total_records,
+        matched_count=res.matched_count,
+        rule_matches_count=res.rule_matches_count,
+        ai_verified_count=res.ai_verified_count,
+        exceptions_count=res.exceptions_count,
+        match_rate=res.match_rate,
+        precision=res.precision,
+        recall=res.recall,
+        true_positives=res.true_positives,
+        false_positives=res.false_positives,
+        false_negatives=res.false_negatives,
+        ai_verification_accuracy=res.ai_accuracy,
+        manual_hours_saved=res.manual_hours_saved,
+        processing_time_seconds=res.processing_time_seconds,
     )
 
 
@@ -128,7 +114,8 @@ def evaluate_cross_merchant(
     from backend.normalizer import normalize_dataframe
     from backend.rules import apply_rules_in_order, find_duplicate_order_ids
     from backend.ai.engine import verify_discrepancy
-    from backend.synthetic_data.merchant_profiles import MERCHANT_PROFILES
+    from backend.synthetic_data.merchant_archetypes import MERCHANT_ARCHETYPES
+    from backend.config.fee_rules import load_fee_config
 
     merchant_reports: Dict[str, MerchantEvaluationReport] = {}
     total_records_all = 0
@@ -139,7 +126,7 @@ def evaluate_cross_merchant(
     total_ai_total_all = 0
     total_time_all = 0.0
 
-    for m_type, profile in MERCHANT_PROFILES.items():
+    for m_type, profile in MERCHANT_ARCHETYPES.items():
         m_dir = os.path.join(base_dir, m_type)
         inv_path = os.path.join(m_dir, "invoices.csv")
         set_path = os.path.join(m_dir, "settlements.csv")
@@ -193,7 +180,7 @@ def evaluate_cross_merchant(
                     settlement=settle,
                     bank=bank,
                     duplicate_order_ids=duplicates,
-                    fee_config=profile.fee_config,
+                    fee_config=load_fee_config(m_type),
                 )
                 is_rule_match = rule_res.is_matched
 

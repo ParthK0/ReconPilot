@@ -4,12 +4,8 @@ backend/services/metrics.py
 Metrics computation service for reconciliation batches and honest evaluation.
 """
 
-from decimal import Decimal
-from typing import Optional, Dict, Any
+from typing import Optional
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
-
-from backend.db.models import MetricsSnapshot, Match, ExceptionRecord, Record
 
 
 class BatchMetricsResult(BaseModel):

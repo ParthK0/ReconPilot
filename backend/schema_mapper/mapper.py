@@ -14,12 +14,12 @@ import json
 import os
 import re
 from typing import Dict, List, Optional, Tuple, Any
-import httpx
 import pandas as pd
 from pydantic import BaseModel, Field
 
 from backend.parser.csv_parser import EXPECTED_COLUMNS
 from backend.schema_mapper.aliases import COLUMN_ALIASES
+from backend.ai.llm_client import LLMClient
 
 
 AUTO_MAP_CONFIDENCE_THRESHOLD: float = 0.95
@@ -86,6 +86,10 @@ class SchemaMapper:
         if os.getenv("RECONPILOT_AI_MODE") == "offline":
             return {}
 
+        has_creds = bool(self.gemini_api_key or self.openai_api_key)
+        if not has_creds:
+            return {}
+
         system_prompt = (
             "You are a financial data schema mapper. Given a list of CSV column names from a merchant's financial file "
             "and optional sample data, map each input column to its matching canonical column from the allowed target list.\n"
@@ -101,46 +105,20 @@ class SchemaMapper:
         }
         user_prompt = f"Map these financial columns to canonical targets:\n{json.dumps(user_content, indent=2)}"
 
-        if self.gemini_api_key:
-            try:
-                active_model = self.model_name if "gemini" in self.model_name.lower() else "gemini-2.5-pro"
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{active_model}:generateContent?key={self.gemini_api_key}"
-                payload = {
-                    "system_instruction": {"parts": [{"text": system_prompt}]},
-                    "contents": [{"parts": [{"text": user_prompt}]}],
-                    "generationConfig": {"response_mime_type": "application/json", "temperature": 0.0},
-                }
-                with httpx.Client(timeout=10.0) as client:
-                    resp = client.post(url, json=payload)
-                    resp.raise_for_status()
-                    data = resp.json()
-                    raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
-                    return json.loads(raw_text)
-            except Exception:
-                pass
-
-        elif self.openai_api_key:
-            try:
-                active_model = self.model_name if "gpt" in self.model_name.lower() else "gpt-5.6-terra"
-                headers = {"Authorization": f"Bearer {self.openai_api_key}", "Content-Type": "application/json"}
-                payload = {
-                    "model": active_model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "response_format": {"type": "json_object"},
-                    "temperature": 0.0,
-                }
-                with httpx.Client(timeout=10.0) as client:
-                    resp = client.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
-                    resp.raise_for_status()
-                    data = resp.json()
-                    return json.loads(data["choices"][0]["message"]["content"])
-            except Exception:
-                pass
-
-        return {}
+        try:
+            client = LLMClient(
+                openai_api_key=self.openai_api_key,
+                gemini_api_key=self.gemini_api_key,
+                model_name=self.model_name,
+            )
+            llm_res = client.generate_json_completion(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                fallback_simulation_fn=lambda: {},
+            )
+            return llm_res.parsed_json if isinstance(llm_res.parsed_json, dict) else {}
+        except Exception:
+            return {}
 
     def map_columns(
         self,

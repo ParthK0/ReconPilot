@@ -55,6 +55,10 @@ DEFAULT_FEE_CONFIG = FeeConfig(
     settlement_delay_days=2,
 )
 
+STANDARD_FEE_RATE: Decimal = DEFAULT_FEE_CONFIG.mdr_rate  # 2.0% standard Razorpay MDR
+STANDARD_GST_RATE: Decimal = DEFAULT_FEE_CONFIG.gst_rate  # 18.0% GST on MDR fees
+STANDARD_TDS_RATE: Decimal = DEFAULT_FEE_CONFIG.tds_rate  # 1.0% TDS under Section 194O
+
 
 def load_fee_config(config_source: Union[str, Path, Dict[str, Any], FeeConfig, None] = None) -> FeeConfig:
     """

@@ -20,15 +20,15 @@ from typing import Dict, Any, Optional, List, Union, Set
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from backend.db.models import Batch, Record, Match, AIVerification, ExceptionRecord, MetricsSnapshot
-from backend.config.fee_rules import FeeConfig, load_fee_config
+from backend.db.models import Batch, Record, Match, ExceptionRecord, MetricsSnapshot
+from backend.config.fee_rules import FeeConfig
 from backend.normalizer import NormalizedRecord
 from backend.rules import (
     apply_rules_in_order,
     find_duplicate_order_ids,
     RuleMatchResult,
 )
-from backend.ai.engine import verify_discrepancy, verify_discrepancies_clustered
+from backend.ai.engine import verify_discrepancy
 from backend.services.metrics import compute_batch_metrics
 from backend.logging_config import get_logger
 

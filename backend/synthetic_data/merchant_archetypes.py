@@ -17,9 +17,8 @@ currency formats, date formatting, and exception profiles across:
 10. Enterprise B2B (Bulk Invoices / Section 194J TDS / 30-day payment cycles)
 """
 
-from decimal import Decimal
-from typing import Dict, Any, List, Optional
-from pydantic import BaseModel, Field
+from typing import Dict, List
+from pydantic import BaseModel
 
 
 class MerchantArchetype(BaseModel):

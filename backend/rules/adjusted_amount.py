@@ -9,13 +9,17 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional, Union
 from pydantic import BaseModel, Field
 
-from backend.config.fee_rules import FeeConfig, DEFAULT_FEE_CONFIG, load_fee_config
+from backend.config.fee_rules import (
+    FeeConfig,
+    DEFAULT_FEE_CONFIG,
+    load_fee_config,
+    STANDARD_FEE_RATE,
+    STANDARD_GST_RATE,
+    STANDARD_TDS_RATE,
+)
 
 
 ONE_PAISA = Decimal("0.01")
-STANDARD_FEE_RATE = Decimal("0.02")
-STANDARD_GST_RATE = Decimal("0.18")
-STANDARD_TDS_RATE = Decimal("0.01")
 
 
 def _to_paisa(amount: Decimal) -> Decimal:

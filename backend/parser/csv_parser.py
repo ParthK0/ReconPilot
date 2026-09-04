@@ -153,7 +153,7 @@ class BaseCSVParser(ABC):
         Sanitizes string cells against CSV / Spreadsheet formula injection.
         Prepends a quote when formula characters are detected alongside alphabetic identifiers.
         """
-        for col in df.select_dtypes(include=["object"]).columns:
+        for col in df.select_dtypes(include=["object", "string"]).columns:
             df[col] = df[col].apply(
                 lambda val: f"'{val}" if isinstance(val, str) and val.startswith(("=", "@", "+", "-")) and any(c.isalpha() for c in val[:10]) else val
             )

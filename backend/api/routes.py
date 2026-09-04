@@ -75,13 +75,13 @@ async def _read_validated_file(upload_file: UploadFile, max_size: int = MAX_FILE
     """
     if getattr(upload_file, "size", None) is not None and upload_file.size > max_size:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"Uploaded file '{upload_file.filename}' exceeds maximum limit of 10 MB per file.",
         )
     data = await upload_file.read(max_size + 1)
     if len(data) > max_size:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"Uploaded file '{upload_file.filename}' exceeds maximum limit of 10 MB per file.",
         )
     return data
@@ -172,7 +172,7 @@ async def upload_batch(
     for f in (settlement_csv, bank_csv, invoice_csv, ground_truth_json):
         if f is not None and getattr(f, "size", None) is not None and f.size > MAX_FILE_SIZE_BYTES:
             raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                 detail=f"Uploaded file '{f.filename}' exceeds maximum limit of 10 MB per file.",
             )
 
@@ -374,9 +374,20 @@ def get_batch_matches(
     total = query.count()
     matches = query.order_by(Match.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
 
-    # Pre-fetch all batch records in 1 query to prevent N+1 query loops
-    batch_records = db.query(Record).filter(Record.batch_id == batch_id).all()
-    record_map: Dict[str, Record] = {r.id: r for r in batch_records}
+    # Pre-fetch only records for the paginated page matches
+    record_ids = set()
+    for m in matches:
+        if m.settlement_record_id:
+            record_ids.add(m.settlement_record_id)
+        if m.invoice_record_id:
+            record_ids.add(m.invoice_record_id)
+        if m.bank_record_id:
+            record_ids.add(m.bank_record_id)
+
+    record_map: Dict[str, Record] = {}
+    if record_ids:
+        page_records = db.query(Record).filter(Record.id.in_(record_ids)).all()
+        record_map = {r.id: r for r in page_records}
 
     result = []
     for m in matches:

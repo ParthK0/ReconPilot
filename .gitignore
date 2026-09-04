@@ -62,3 +62,8 @@ yarn-error.log*
 *.swo
 .DS_Store
 Thumbs.db
+
+# Live demo data (contains real Razorpay test payment IDs)
+backend/live_demo_data/
+backend/scripts/seed_output.json
+backend/verification_batch_*/

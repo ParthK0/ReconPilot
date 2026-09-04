@@ -21,21 +21,21 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 import random
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple
 
-from backend.config.fee_rules import FeeConfig, load_fee_config
+from backend.config.fee_rules import (
+    FeeConfig,
+    load_fee_config,
+    STANDARD_FEE_RATE,
+    STANDARD_GST_RATE,
+    STANDARD_TDS_RATE,
+)
 from backend.synthetic_data.merchant_archetypes import MERCHANT_ARCHETYPES, MerchantArchetype, get_archetype
 
 
 def round_curr(val: Decimal) -> Decimal:
     """Rounds to 2 decimal places using half-up standard."""
     return val.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-
-# Documented standard rate schedule for rule-based resolution (defaults)
-STANDARD_FEE_RATE = Decimal("0.02")  # 2.0% standard Razorpay MDR
-STANDARD_GST_RATE = Decimal("0.18")  # 18.0% GST on fees
-STANDARD_TDS_RATE = Decimal("0.01")  # 1.0% TDS under Section 194O
 
 
 def _format_currency_val(val: Decimal, style: str) -> str:

@@ -14,8 +14,8 @@ Standardizes operational discrepancy categories into 8 functional operational do
 8. Unclassified (1)
 """
 
-from typing import Dict, List, Optional
-from pydantic import BaseModel, Field
+from typing import Dict, List
+from pydantic import BaseModel
 
 
 class ExceptionDefinition(BaseModel):

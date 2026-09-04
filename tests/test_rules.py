@@ -1,21 +1,20 @@
 import os
 import json
 from decimal import Decimal
-from datetime import date, timedelta
-import pandas as pd
+from datetime import timedelta, date
 import pytest
 
 from backend.parser import InvoiceParser, SettlementParser, BankStatementParser
-from backend.normalizer import normalize_dataframe, NormalizedRecord
+from backend.normalizer import normalize_dataframe
+from backend.normalizer.normalizer import NormalizedRecord
 from backend.rules import (
-    RuleMatchResult,
-    ChargeItem,
-    ChargeBreakdown,
     match_exact_order_id,
     match_exact_reference_number,
     match_exact_amount,
     match_settlement_date_window,
     match_fee_gst_tds_adjusted_amount,
+    match_tolerance_amount,
+    match_fx_spread_tolerance,
     apply_rules_in_order,
     find_duplicate_order_ids,
 )
@@ -247,3 +246,104 @@ def test_full_batch_rule_engine_breakdown(loaded_dataset):
     assert total_matched + unmatched_count == 100
     assert total_matched == 86
     assert unmatched_count == 14
+
+
+# ---------------------------------------------------------------------------
+# 7. Rule 6: Tolerance Amount Match
+# ---------------------------------------------------------------------------
+
+def test_tolerance_match_within_2_rupees():
+    """Variance of Rs 1.50 with matching order ID must match Rule 6 at 95% confidence."""
+    inv = NormalizedRecord(
+        id="inv-1",
+        batch_id="b-1",
+        source_type="invoice",
+        transaction_id="TXN-1",
+        order_id="ORD-TOL-101",
+        amount=Decimal("5000.00"),
+        txn_date=date(2026, 8, 1),
+        status="paid",
+    )
+    settle = NormalizedRecord(
+        id="set-1",
+        batch_id="b-1",
+        source_type="settlement",
+        transaction_id="SET-1",
+        order_id="ORD-TOL-101",
+        amount=Decimal("4998.50"),  # Rs 1.50 delta
+        txn_date=date(2026, 8, 2),
+        status="settled",
+    )
+
+    res = match_tolerance_amount(invoice=inv, settlement=settle)
+    assert res.is_matched is True
+    assert res.rule_name == "tolerance_amount_match"
+    assert res.confidence == Decimal("95.00")
+
+    # Verify pipeline order
+    pipe_res = apply_rules_in_order(invoice=inv, settlement=settle)
+    assert pipe_res.is_matched is True
+    assert pipe_res.rule_name == "tolerance_amount_match"
+
+
+def test_tolerance_match_rejects_exceeding_tolerance():
+    """Variance of Rs 5.00 exceeds Rs 2.00 tolerance and must fall through."""
+    inv = NormalizedRecord(
+        id="inv-2",
+        batch_id="b-1",
+        source_type="invoice",
+        transaction_id="TXN-2",
+        order_id="ORD-TOL-102",
+        amount=Decimal("5000.00"),
+        txn_date=date(2026, 8, 1),
+        status="paid",
+    )
+    settle = NormalizedRecord(
+        id="set-2",
+        batch_id="b-1",
+        source_type="settlement",
+        transaction_id="SET-2",
+        order_id="ORD-TOL-102",
+        amount=Decimal("4995.00"),  # Rs 5.00 delta
+        txn_date=date(2026, 8, 2),
+        status="settled",
+    )
+
+    res = match_tolerance_amount(invoice=inv, settlement=settle)
+    assert res.is_matched is False
+
+
+# ---------------------------------------------------------------------------
+# 8. International FX Spread Corridor Match
+# ---------------------------------------------------------------------------
+
+def test_fx_spread_tolerance_matching():
+    inv = NormalizedRecord(
+        id="inv_fx_01",
+        batch_id="batch_intl",
+        source_type="invoice",
+        transaction_id="TXN_USD_100",
+        order_id="ORD_INTL_001",
+        amount=Decimal("10000.00"),
+        currency="INR",
+        txn_date=date(2026, 8, 1),
+        status="paid",
+    )
+    settle = NormalizedRecord(
+        id="set_fx_01",
+        batch_id="batch_intl",
+        source_type="settlement",
+        transaction_id="SET_INR_100",
+        order_id="ORD_INTL_001",
+        amount=Decimal("9750.00"),
+        currency="INR",
+        txn_date=date(2026, 8, 3),
+        status="settled",
+    )
+
+    res = match_fx_spread_tolerance(invoice=inv, settlement=settle)
+    assert res.is_matched is True
+    assert res.rule_name == "fx_spread_tolerance"
+    assert res.confidence == Decimal("94.00")
+    assert "international FX spread corridor" in res.notes
+

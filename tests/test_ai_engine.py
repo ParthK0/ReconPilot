@@ -7,16 +7,14 @@ import pytest
 from sqlalchemy.orm import Session
 
 from backend.db.session import SessionLocal, engine, Base
-from backend.db.models import Batch, Match, Record, AIVerification
+from backend.db.models import Batch, Match, AIVerification
 from backend.parser import InvoiceParser, SettlementParser, BankStatementParser
 from backend.normalizer import normalize_dataframe, NormalizedRecord
 from backend.ai.engine import (
     FinanceVerificationOrchestrator,
     verify_discrepancy,
     assemble_context_payload,
-    AIVerificationResult,
 )
-from backend.ai.validator import FinanceVerificationResponse
 
 SYNTHETIC_DATA_DIR = "backend/synthetic_data"
 

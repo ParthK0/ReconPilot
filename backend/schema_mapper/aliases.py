@@ -27,6 +27,7 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
         "charge_amount",
         "final_amount",
         "fare_amount",
+        "net_settlement",
         "treatment_cost",
         "remittance_amount",
         "reload_amount",

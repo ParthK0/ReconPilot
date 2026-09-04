@@ -16,22 +16,9 @@ from sqlalchemy import (
     JSON,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
-
-
-def get_uuid_column(is_pk: bool = False, fk_target: Optional[str] = None, nullable: bool = False):
-    """
-    Returns a UUID column compatible with both PostgreSQL and SQLite (fallback).
-    """
-    col_type = String(36)
-    if is_pk:
-        return Column(col_type, primary_key=True, default=lambda: str(uuid.uuid4()))
-    if fk_target:
-        return Column(col_type, ForeignKey(fk_target), nullable=nullable)
-    return Column(col_type, nullable=nullable)
 
 
 class Batch(Base):

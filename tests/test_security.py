@@ -8,7 +8,6 @@ Comprehensive security and backend hardening test suite:
 4. Maximum Payload Size Enforcement
 """
 
-import io
 import pytest
 from fastapi.testclient import TestClient
 from backend.main import app
