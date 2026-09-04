@@ -6,11 +6,9 @@ import {
   RefreshCw,
   Layers,
   UploadCloud,
+  Building2,
   FileSpreadsheet,
   AlertTriangle,
-  Play,
-  Database,
-  Building2,
 } from "lucide-react";
 
 import { UploadPanel } from "../components/UploadPanel";
