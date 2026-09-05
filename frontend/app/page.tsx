@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Sparkles,
   RefreshCw,
@@ -9,6 +9,7 @@ import {
   Building2,
   FileSpreadsheet,
   AlertTriangle,
+  Activity,
 } from "lucide-react";
 
 import { UploadPanel } from "../components/UploadPanel";
@@ -19,6 +20,8 @@ import { MatchTable, MatchItem } from "../components/MatchTable";
 import { ExceptionGrid, ExceptionItem } from "../components/ExceptionGrid";
 import { EvidenceDrawer, MatchDetail } from "../components/EvidenceDrawer";
 import { ReviewModal } from "../components/ReviewModal";
+import { Badge } from "../components/ui/Badge";
+import { Button } from "../components/ui/Button";
 import { API_BASE_URL } from "../lib/api";
 
 export default function Home() {
@@ -64,8 +67,8 @@ export default function Home() {
       .catch((err) => console.error("Error fetching merchants", err));
   }, []);
 
-  // 2. Fetch batch status and details
-  const loadBatchData = async (batchId: string) => {
+  // 2. Fetch batch status and details (memoized)
+  const loadBatchData = useCallback(async (batchId: string) => {
     try {
       setIsLoadingMatches(true);
       const [statusRes, matchesRes, cashRes, excRes] = await Promise.all([
@@ -109,15 +112,16 @@ export default function Home() {
     } finally {
       setIsLoadingMatches(false);
     }
-  };
+  }, []);
 
-  // 3. Generate synthetic archetype batch
-  const handleGenerateBatch = async () => {
+  // 3. Generate synthetic archetype batch (memoized)
+  const handleGenerateBatch = useCallback(async () => {
     setIsGenerating(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/batches/generate?merchant_type=${selectedMerchant}&record_count=100`, {
-        method: "POST",
-      });
+      const res = await fetch(
+        `${API_BASE_URL}/api/v1/batches/generate?merchant_type=${selectedMerchant}&record_count=100`,
+        { method: "POST" }
+      );
       if (res.ok) {
         const data = await res.json();
         setCurrentBatchId(data.batch_id);
@@ -129,15 +133,15 @@ export default function Home() {
     } finally {
       setIsGenerating(false);
     }
-  };
+  }, [selectedMerchant, loadBatchData]);
 
-  // 4. Initial load demo batch
+  // Initial load
   useEffect(() => {
     handleGenerateBatch();
-  }, []);
+  }, [handleGenerateBatch]);
 
-  // 5. Inspect match detail
-  const handleSelectMatch = async (matchId: string) => {
+  // 4. Inspect match detail (memoized)
+  const handleSelectMatch = useCallback(async (matchId: string) => {
     setSelectedMatchId(matchId);
     setIsLoadingDetail(true);
     try {
@@ -151,68 +155,87 @@ export default function Home() {
     } finally {
       setIsLoadingDetail(false);
     }
-  };
+  }, []);
 
-  // 6. Human review submission
-  const handleSubmitReview = async (
-    exceptionId: string,
-    action: "approve" | "reject",
-    reason: string,
-    notes: string
-  ) => {
-    if (!currentBatchId) return;
-    try {
-      await fetch(`${API_BASE_URL}/api/v1/matches/${exceptionId}/review`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action,
-          reason,
-          notes,
-          merchant_type: selectedMerchant,
-        }),
-      });
-      await loadBatchData(currentBatchId);
-    } catch (err) {
-      console.error("Error submitting review", err);
-    }
-  };
+  // 5. Human review submission (memoized)
+  const handleSubmitReview = useCallback(
+    async (
+      exceptionId: string,
+      action: "approve" | "reject",
+      reason: string,
+      notes: string
+    ) => {
+      if (!currentBatchId) return;
+      try {
+        await fetch(`${API_BASE_URL}/api/v1/matches/${exceptionId}/review`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action,
+            reason,
+            notes,
+            merchant_type: selectedMerchant,
+          }),
+        });
+        await loadBatchData(currentBatchId);
+      } catch (err) {
+        console.error("Error submitting review", err);
+      }
+    },
+    [currentBatchId, selectedMerchant, loadBatchData]
+  );
 
-  const handleExportCsv = () => {
+  const handleExportCsv = useCallback(() => {
     if (!currentBatchId) return;
     window.open(`${API_BASE_URL}/api/v1/batches/${currentBatchId}/export/csv`, "_blank");
-  };
+  }, [currentBatchId]);
+
+  const isLoading = isGenerating || isLoadingMatches;
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100 selection:bg-indigo-500 selection:text-white pb-16">
+    <div className="min-h-screen bg-slate-950 text-slate-100 selection:bg-indigo-500 selection:text-white pb-16">
+      {/* Skip to Main Content for Accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2 focus:bg-indigo-600 focus:text-white focus:rounded-lg focus:shadow-xl"
+      >
+        Skip to main content
+      </a>
+
       {/* Top Navbar */}
-      <header className="border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <header className="border-b border-slate-800/80 bg-slate-950/90 backdrop-blur-md sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+          {/* Brand Identity */}
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-indigo-400 flex items-center justify-center shadow-lg shadow-indigo-600/30">
-              <Sparkles className="w-4 h-4 text-white" />
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-indigo-400 flex items-center justify-center shadow-lg shadow-indigo-600/30 shrink-0">
+              <Sparkles className="w-4 h-4 text-white" aria-hidden="true" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-base font-black tracking-tight text-white">ReconPilot</h1>
-                <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-indigo-950 text-indigo-400 border border-indigo-800/40">
+                <span className="text-base font-black tracking-tight text-white">ReconPilot</span>
+                <Badge variant="ai" size="sm">
                   Track 04: AI Finance Controller
-                </span>
+                </Badge>
               </div>
-              <p className="text-[11px] text-slate-400">
-                Deterministic Rules &bull; Math-Proven AI &bull; Honest Exceptions
+              <p className="text-[11px] text-slate-400 font-medium">
+                Deterministic Rules &bull; Math-Proven AI &bull; Treasury Control
               </p>
             </div>
           </div>
 
-          {/* Quick Actions & Vertical Selector */}
+          {/* Quick Actions & Profile Selector */}
           <div className="flex items-center gap-3">
-            <div className="hidden sm:flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-lg p-1">
-              <Building2 className="w-3.5 h-3.5 text-slate-400 ml-2" />
+            {/* Merchant Archetype Selector */}
+            <div className="hidden sm:flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl p-1.5 text-xs">
+              <label htmlFor="nav-merchant-select" className="sr-only">
+                Select Merchant Archetype
+              </label>
+              <Building2 className="w-3.5 h-3.5 text-slate-400 ml-1.5" aria-hidden="true" />
               <select
+                id="nav-merchant-select"
                 value={selectedMerchant}
                 onChange={(e) => setSelectedMerchant(e.target.value)}
-                className="bg-transparent text-xs text-slate-200 font-medium focus:outline-none pr-2"
+                className="bg-transparent text-xs text-slate-200 font-medium focus:outline-none pr-2 cursor-pointer"
               >
                 {merchants.map((m) => (
                   <option key={m.merchant_type} value={m.merchant_type} className="bg-slate-900">
@@ -222,25 +245,35 @@ export default function Home() {
               </select>
             </div>
 
-            <button
+            {/* Run Demo Batch Button */}
+            <Button
+              variant="primary"
+              size="sm"
+              isLoading={isGenerating}
               onClick={handleGenerateBatch}
-              disabled={isGenerating}
-              className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 text-white text-xs font-semibold rounded-lg shadow-md shadow-indigo-600/20 transition-all flex items-center gap-2"
+              leftIcon={<RefreshCw className={`w-3.5 h-3.5 ${isGenerating ? "animate-spin" : ""}`} />}
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${isGenerating ? "animate-spin" : ""}`} />
-              <span>{isGenerating ? "Simulating..." : "Run Demo Batch"}</span>
-            </button>
+              {isGenerating ? "Simulating..." : "Run Demo Batch"}
+            </Button>
           </div>
         </div>
       </header>
 
       {/* Main Container */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
-        {/* Navigation Tabs */}
-        <div className="flex items-center gap-2 border-b border-slate-800/80 pb-2">
+      <main id="main-content" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
+        {/* Navigation Tabs Bar */}
+        <div
+          role="tablist"
+          aria-label="Reconciliation Workflow Navigation"
+          className="flex items-center gap-2 border-b border-slate-800/80 pb-2 overflow-x-auto"
+        >
           <button
+            role="tab"
+            id="tab-dashboard"
+            aria-selected={activeTab === "dashboard"}
+            aria-controls="panel-dashboard"
             onClick={() => setActiveTab("dashboard")}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
               activeTab === "dashboard"
                 ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/20"
                 : "text-slate-400 hover:text-slate-200 hover:bg-slate-900"
@@ -251,8 +284,12 @@ export default function Home() {
           </button>
 
           <button
+            role="tab"
+            id="tab-upload"
+            aria-selected={activeTab === "upload"}
+            aria-controls="panel-upload"
             onClick={() => setActiveTab("upload")}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
               activeTab === "upload"
                 ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/20"
                 : "text-slate-400 hover:text-slate-200 hover:bg-slate-900"
@@ -263,48 +300,77 @@ export default function Home() {
           </button>
 
           <button
+            role="tab"
+            id="tab-matches"
+            aria-selected={activeTab === "matches"}
+            aria-controls="panel-matches"
             onClick={() => setActiveTab("matches")}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
               activeTab === "matches"
                 ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/20"
                 : "text-slate-400 hover:text-slate-200 hover:bg-slate-900"
             }`}
           >
             <FileSpreadsheet className="w-3.5 h-3.5" />
-            <span>Matched Ledger ({matches.length})</span>
+            <span>Matched Ledger</span>
+            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-950 text-indigo-300 font-mono">
+              {matches.length}
+            </span>
           </button>
 
           <button
+            role="tab"
+            id="tab-exceptions"
+            aria-selected={activeTab === "exceptions"}
+            aria-controls="panel-exceptions"
             onClick={() => setActiveTab("exceptions")}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
               activeTab === "exceptions"
                 ? "bg-amber-600 text-white shadow-lg shadow-amber-600/20"
                 : "text-slate-400 hover:text-slate-200 hover:bg-slate-900"
             }`}
           >
             <AlertTriangle className="w-3.5 h-3.5" />
-            <span>Exceptions ({exceptions.length})</span>
+            <span>Exceptions</span>
+            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-950 text-amber-300 font-mono">
+              {exceptions.length}
+            </span>
           </button>
         </div>
 
         {/* Tab 1: Dashboard View */}
         {activeTab === "dashboard" && (
-          <div className="space-y-6">
-            <MetricsCards metrics={metrics} />
-            <AnalyticsCharts metrics={metrics} exceptionCounts={exceptionCounts} />
-            <CashPositionBanner cashPosition={cashPosition} />
+          <div
+            id="panel-dashboard"
+            role="tabpanel"
+            aria-labelledby="tab-dashboard"
+            className="space-y-6 animate-fade-in"
+          >
+            <MetricsCards metrics={metrics} isLoading={isLoading} />
+            <AnalyticsCharts
+              metrics={metrics}
+              exceptionCounts={exceptionCounts}
+              isLoading={isLoading}
+            />
+            <CashPositionBanner cashPosition={cashPosition} isLoading={isLoading} />
             <MatchTable
               matches={matches}
               selectedMatchId={selectedMatchId}
               onSelectMatch={handleSelectMatch}
               onExportCsv={handleExportCsv}
+              isLoading={isLoadingMatches}
             />
           </div>
         )}
 
         {/* Tab 2: Upload CSVs View */}
         {activeTab === "upload" && (
-          <div className="space-y-6">
+          <div
+            id="panel-upload"
+            role="tabpanel"
+            aria-labelledby="tab-upload"
+            className="space-y-6 animate-fade-in"
+          >
             <UploadPanel
               merchants={merchants}
               onUploadSuccess={(batchId) => {
@@ -318,26 +384,38 @@ export default function Home() {
 
         {/* Tab 3: Matched Ledger View */}
         {activeTab === "matches" && (
-          <div className="space-y-6">
+          <div
+            id="panel-matches"
+            role="tabpanel"
+            aria-labelledby="tab-matches"
+            className="space-y-6 animate-fade-in"
+          >
             <MatchTable
               matches={matches}
               selectedMatchId={selectedMatchId}
               onSelectMatch={handleSelectMatch}
               onExportCsv={handleExportCsv}
+              isLoading={isLoadingMatches}
             />
           </div>
         )}
 
         {/* Tab 4: Exceptions View */}
         {activeTab === "exceptions" && (
-          <div className="space-y-6">
+          <div
+            id="panel-exceptions"
+            role="tabpanel"
+            aria-labelledby="tab-exceptions"
+            className="space-y-6 animate-fade-in"
+          >
             <ExceptionGrid
               exceptions={exceptions}
               onOpenReview={(exc) => setReviewingException(exc)}
+              isLoading={isLoadingMatches}
             />
           </div>
         )}
-      </div>
+      </main>
 
       {/* Side Audit Drawer */}
       {selectedMatchId && (
@@ -359,6 +437,6 @@ export default function Home() {
           onSubmitReview={handleSubmitReview}
         />
       )}
-    </main>
+    </div>
   );
 }

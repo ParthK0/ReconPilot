@@ -4,12 +4,13 @@ import React, { useState } from "react";
 import {
   AlertTriangle,
   Clock,
-  HelpCircle,
-  ArrowRight,
-  ShieldAlert,
-  ChevronDown,
   UserCheck,
+  CheckCircle2,
+  Filter,
 } from "lucide-react";
+import { Badge } from "./ui/Badge";
+import { Button } from "./ui/Button";
+import { EmptyState } from "./ui/EmptyState";
 
 export interface ExceptionItem {
   exception_id: string;
@@ -26,9 +27,14 @@ export interface ExceptionItem {
 interface ExceptionGridProps {
   exceptions: ExceptionItem[];
   onOpenReview: (exception: ExceptionItem) => void;
+  isLoading?: boolean;
 }
 
-export function ExceptionGrid({ exceptions, onOpenReview }: ExceptionGridProps) {
+export function ExceptionGrid({
+  exceptions,
+  onOpenReview,
+  isLoading = false,
+}: ExceptionGridProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
 
   const categories = Array.from(new Set(exceptions.map((e) => e.category)));
@@ -42,97 +48,150 @@ export function ExceptionGrid({ exceptions, onOpenReview }: ExceptionGridProps) 
   };
 
   const formatCurrency = (val: number | null) => {
-    if (val === null || val === undefined) return "-";
-    return `₹${val.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    if (val === null || val === undefined) return "—";
+    return `₹${val.toLocaleString("en-IN", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
   };
 
   return (
-    <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-5 shadow-xl backdrop-blur-md">
+    <div className="bg-slate-900/70 border border-slate-800/80 rounded-2xl p-5 shadow-xl backdrop-blur-md space-y-5">
+      {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800/80">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="p-1.5 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
-              <AlertTriangle className="w-4 h-4" />
-            </span>
-            <h3 className="text-sm font-bold text-slate-100">Operational Exceptions Queue</h3>
+        <div className="flex items-center gap-2.5">
+          <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+            <AlertTriangle className="w-4 h-4" aria-hidden="true" />
           </div>
-          <p className="text-xs text-slate-400 mt-0.5">
-            Discrepancies that failed deterministic rate schedules and AI math validation, routed for human review.
-          </p>
+          <div>
+            <h2 className="text-sm sm:text-base font-bold text-slate-100">Operational Exceptions Queue</h2>
+            <p className="text-xs text-slate-400">
+              Discrepancies flagged by deterministic rules or arithmetic validator awaiting controller action
+            </p>
+          </div>
         </div>
 
         <div className="flex items-center gap-2">
-          <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-amber-500"
-          >
-            <option value="all">All Exception Types ({exceptions.length})</option>
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {formatCategory(c)} ({exceptions.filter((e) => e.category === c).length})
-              </option>
-            ))}
-          </select>
+          <Badge variant="warning" size="md">
+            {exceptions.length} Pending Actions
+          </Badge>
         </div>
       </div>
 
-      {filteredExceptions.length === 0 ? (
-        <div className="py-12 text-center text-slate-500 italic text-xs">
-          No exceptions in the selected filter. All records reconciled.
+      {/* Category Filter Chips */}
+      {categories.length > 0 && (
+        <div className="flex items-center gap-2 overflow-x-auto pb-1" role="tablist" aria-label="Filter exceptions by category">
+          <button
+            role="tab"
+            aria-selected={selectedCategory === "all"}
+            onClick={() => setSelectedCategory("all")}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+              selectedCategory === "all"
+                ? "bg-amber-600 text-white shadow-md shadow-amber-600/20"
+                : "bg-slate-950/80 text-slate-400 hover:text-slate-200 border border-slate-800"
+            }`}
+          >
+            All Exceptions ({exceptions.length})
+          </button>
+          {categories.map((cat) => {
+            const count = exceptions.filter((e) => e.category === cat).length;
+            const isSelected = selectedCategory === cat;
+            return (
+              <button
+                key={cat}
+                role="tab"
+                aria-selected={isSelected}
+                onClick={() => setSelectedCategory(cat)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+                  isSelected
+                    ? "bg-amber-600 text-white shadow-md shadow-amber-600/20"
+                    : "bg-slate-950/80 text-slate-400 hover:text-slate-200 border border-slate-800"
+                }`}
+              >
+                <span>{formatCategory(cat)}</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-800/80 font-mono">
+                  {count}
+                </span>
+              </button>
+            );
+          })}
         </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5 mt-4">
+      )}
+
+      {/* Exceptions Grid Cards */}
+      {filteredExceptions.length > 0 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredExceptions.map((exc) => (
             <div
               key={exc.exception_id}
-              className="bg-slate-950/60 border border-slate-800/90 hover:border-amber-500/40 rounded-xl p-4 transition-all flex flex-col justify-between"
+              className="bg-slate-950/60 border border-slate-800/80 hover:border-amber-500/40 rounded-2xl p-4 flex flex-col justify-between gap-4 transition-all duration-150 hover:shadow-lg hover:shadow-amber-950/10"
             >
-              <div>
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-950/80 text-amber-400 border border-amber-800/40">
+              <div className="space-y-3">
+                <div className="flex items-start justify-between gap-2">
+                  <Badge variant="warning" size="sm">
                     {formatCategory(exc.category)}
-                  </span>
-                  <span className="text-[10px] text-slate-500 font-mono">
-                    {exc.exception_id.substring(0, 8)}
-                  </span>
-                </div>
-
-                <div className="flex items-baseline justify-between mt-2">
-                  <span className="text-xs font-semibold text-slate-200 font-mono">
-                    {exc.order_id || "ID: " + exc.source_record_id.substring(0, 10)}
-                  </span>
-                  <span className="text-xs font-bold text-amber-300 font-mono">
-                    {formatCurrency(exc.amount)}
+                  </Badge>
+                  <span className="text-[10px] font-mono text-slate-500">
+                    {exc.created_at ? new Date(exc.created_at).toLocaleTimeString() : "Pending"}
                   </span>
                 </div>
 
-                {exc.discrepancy_amount !== null && exc.discrepancy_amount !== undefined && (
-                  <div className="text-[11px] text-rose-400 font-mono mt-1">
-                    Variance Delta: {formatCurrency(exc.discrepancy_amount)}
+                <div>
+                  <div className="text-xs text-slate-400">Order Reference:</div>
+                  <div className="text-sm font-bold font-mono text-slate-100">
+                    {exc.order_id || "Unlinked Record"}
                   </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 bg-slate-900/60 border border-slate-800/60 rounded-xl p-2.5 text-xs font-mono">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">Gross Amount</span>
+                    <span className="font-bold text-slate-200">{formatCurrency(exc.amount)}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-amber-400 block">Variance (Δ)</span>
+                    <span className="font-bold text-amber-300">
+                      {formatCurrency(exc.discrepancy_amount)}
+                    </span>
+                  </div>
+                </div>
+
+                {exc.notes && (
+                  <p className="text-xs text-slate-300 leading-relaxed bg-slate-900/40 rounded-lg p-2 border border-slate-800/50">
+                    {exc.notes}
+                  </p>
                 )}
-
-                <p className="text-xs text-slate-400 mt-2 bg-slate-900/80 p-2 rounded-lg border border-slate-800/60 line-clamp-3">
-                  {exc.notes || "Awaiting human controller investigation and feedback recording."}
-                </p>
               </div>
 
-              <div className="mt-4 pt-3 border-t border-slate-900 flex items-center justify-between">
-                <span className="text-[10px] text-slate-500 font-mono">
-                  Status: {exc.status}
-                </span>
-                <button
-                  onClick={() => onOpenReview(exc)}
-                  className="px-3 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                >
-                  <UserCheck className="w-3.5 h-3.5" />
-                  <span>Review & Learn</span>
-                </button>
-              </div>
+              <Button
+                variant="subtle"
+                size="sm"
+                className="w-full justify-center"
+                leftIcon={<UserCheck className="w-3.5 h-3.5" />}
+                onClick={() => onOpenReview(exc)}
+              >
+                Review & Resolve Exception
+              </Button>
             </div>
           ))}
         </div>
+      ) : (
+        <EmptyState
+          icon={<CheckCircle2 className="w-8 h-8 text-emerald-400" />}
+          title="Zero Pending Exceptions"
+          description="All financial discrepancies for this batch have been resolved or confirmed."
+          action={
+            selectedCategory !== "all" && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setSelectedCategory("all")}
+              >
+                Show All Categories
+              </Button>
+            )
+          }
+        />
       )}
     </div>
   );

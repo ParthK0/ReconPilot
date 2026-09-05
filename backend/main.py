@@ -1,5 +1,13 @@
 import os
+import sys
+from pathlib import Path
 from contextlib import asynccontextmanager
+
+# Ensure repository root is on sys.path so 'backend.*' imports succeed regardless of working directory
+REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv

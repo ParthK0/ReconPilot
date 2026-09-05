@@ -4,11 +4,13 @@ import React from "react";
 import {
   Wallet,
   TrendingUp,
-  Coins,
   ArrowUpRight,
-  Shield,
-  AlertTriangle,
+  ShieldCheck,
+  AlertCircle,
+  HelpCircle,
 } from "lucide-react";
+import { Badge } from "./ui/Badge";
+import { Skeleton } from "./ui/Skeleton";
 
 interface CashPositionData {
   batch_id: string;
@@ -29,9 +31,29 @@ interface CashPositionData {
 
 interface CashPositionBannerProps {
   cashPosition: CashPositionData | null;
+  isLoading?: boolean;
 }
 
-export function CashPositionBanner({ cashPosition }: CashPositionBannerProps) {
+export function CashPositionBanner({
+  cashPosition,
+  isLoading = false,
+}: CashPositionBannerProps) {
+  if (isLoading) {
+    return (
+      <div className="bg-slate-900/70 border border-slate-800/80 rounded-2xl p-5 space-y-4">
+        <div className="flex justify-between items-center">
+          <Skeleton className="h-6 w-48" />
+          <Skeleton className="h-6 w-24 rounded-full" />
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-20 w-full rounded-xl" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   if (!cashPosition) return null;
 
   const formatCurrency = (val: number) => {
@@ -42,80 +64,108 @@ export function CashPositionBanner({ cashPosition }: CashPositionBannerProps) {
     }).format(val);
   };
 
+  const healthVariant =
+    cashPosition.liquidity_health_index >= 80
+      ? "success"
+      : cashPosition.liquidity_health_index >= 60
+      ? "warning"
+      : "danger";
+
   return (
-    <div className="bg-gradient-to-r from-slate-900 via-indigo-950/20 to-slate-900 border border-slate-800/80 rounded-2xl p-5 shadow-lg backdrop-blur-md">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800/60">
-        <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-            <Wallet className="w-5 h-5" />
+    <section
+      aria-label="Live Cash Position & Liquidity Controller"
+      className="bg-gradient-to-r from-slate-900 via-indigo-950/25 to-slate-900 border border-slate-800/80 rounded-2xl p-5 shadow-xl backdrop-blur-md"
+    >
+      {/* Header Row */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800/80">
+        <div className="flex items-start sm:items-center gap-3">
+          <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 shrink-0">
+            <Wallet className="w-5 h-5" aria-hidden="true" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-bold text-slate-100">Live Cash Position & Liquidity Controller</h3>
-              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800/40">
-                Health Index: {cashPosition.liquidity_health_index}/100
-              </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-sm sm:text-base font-bold text-slate-100 tracking-tight">
+                Treasury Cash Position & Liquidity Controller
+              </h2>
+              <Badge variant={healthVariant} size="sm" dot>
+                Health: {cashPosition.liquidity_health_index}/100
+              </Badge>
             </div>
-            <p className="text-xs text-slate-400 mt-0.5">{cashPosition.summary_narrative}</p>
+            <p className="text-xs text-slate-300 mt-1 max-w-2xl leading-relaxed">
+              {cashPosition.summary_narrative}
+            </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-4 text-xs font-mono">
-          <div className="px-3 py-1.5 bg-slate-950/70 border border-slate-800 rounded-lg">
-            <span className="text-slate-500">Reconciled Ratio: </span>
-            <span className="text-emerald-400 font-bold">
+        {/* Status Pills */}
+        <div className="flex items-center gap-2.5 text-xs font-mono shrink-0">
+          <div className="px-3 py-1.5 bg-slate-950/80 border border-slate-800 rounded-xl flex items-center gap-2">
+            <span className="text-slate-400">Reconciled Ratio:</span>
+            <span className="text-emerald-300 font-bold">
               {(cashPosition.reconciled_cash_ratio * 100).toFixed(1)}%
             </span>
           </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-        {/* 1. Bank Balance */}
-        <div className="p-3 bg-slate-950/40 border border-slate-800/40 rounded-xl">
-          <div className="text-[11px] text-slate-400 font-medium">Bank Balance</div>
-          <div className="text-base font-bold text-slate-100 font-mono mt-1">
+      {/* Financial Metrics Grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 pt-4">
+        {/* 1. Confirmed Bank Cash */}
+        <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5 hover:border-slate-700 transition-colors">
+          <div className="flex items-center justify-between text-slate-400 text-xs mb-1.5">
+            <span className="font-medium">Confirmed Bank Cash</span>
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+          </div>
+          <div className="text-lg sm:text-xl font-bold font-mono text-slate-100">
             {formatCurrency(cashPosition.current_bank_balance)}
           </div>
-          <div className="text-[10px] text-slate-500 mt-0.5">Verified in bank credits</div>
+          <div className="text-[11px] text-slate-400 mt-1 font-medium">
+            Settled bank account credit
+          </div>
         </div>
 
-        {/* 2. Expected Inflows */}
-        <div className="p-3 bg-slate-950/40 border border-slate-800/40 rounded-xl">
-          <div className="text-[11px] text-emerald-400 font-medium flex items-center gap-1">
-            <span>Pending Settlements</span>
-            <ArrowUpRight className="w-3 h-3" />
+        {/* 2. In-Flight Settlement Inflows */}
+        <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5 hover:border-slate-700 transition-colors">
+          <div className="flex items-center justify-between text-slate-400 text-xs mb-1.5">
+            <span className="font-medium">In-Flight Pipeline (+)</span>
+            <ArrowUpRight className="w-3.5 h-3.5 text-indigo-400" />
           </div>
-          <div className="text-base font-bold text-emerald-400 font-mono mt-1">
-            +{formatCurrency(cashPosition.pending_settlement_inflows)}
+          <div className="text-lg sm:text-xl font-bold font-mono text-indigo-300">
+            {formatCurrency(cashPosition.pending_settlement_inflows)}
           </div>
-          <div className="text-[10px] text-slate-500 mt-0.5">Clearing in T+1 window</div>
+          <div className="text-[11px] text-slate-400 mt-1 font-medium">
+            T+2 transit from Razorpay
+          </div>
         </div>
 
-        {/* 3. Expected Cash Tomorrow */}
-        <div className="p-3 bg-indigo-950/20 border border-indigo-500/20 rounded-xl">
-          <div className="text-[11px] text-indigo-300 font-medium flex items-center gap-1">
-            <span>Expected Cash Tomorrow</span>
-            <Coins className="w-3 h-3 text-indigo-400" />
+        {/* 3. Pending Refund Reserves */}
+        <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3.5 hover:border-slate-700 transition-colors">
+          <div className="flex items-center justify-between text-slate-400 text-xs mb-1.5">
+            <span className="font-medium">Refund Reserves (-)</span>
+            <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
           </div>
-          <div className="text-base font-bold text-indigo-200 font-mono mt-1">
+          <div className="text-lg sm:text-xl font-bold font-mono text-amber-300">
+            {formatCurrency(cashPosition.pending_refund_reserves)}
+          </div>
+          <div className="text-[11px] text-slate-400 mt-1 font-medium">
+            Held for customer chargebacks
+          </div>
+        </div>
+
+        {/* 4. Expected Net Cash Tomorrow */}
+        <div className="bg-gradient-to-br from-indigo-950/50 to-slate-950/80 border border-indigo-500/30 rounded-xl p-3.5 shadow-sm shadow-indigo-500/10">
+          <div className="flex items-center justify-between text-indigo-200 text-xs mb-1.5">
+            <span className="font-semibold">Expected Cash Tomorrow (=)</span>
+            <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+          </div>
+          <div className="text-lg sm:text-xl font-bold font-mono text-emerald-300">
             {formatCurrency(cashPosition.expected_cash_tomorrow)}
           </div>
-          <div className="text-[10px] text-indigo-400/70 mt-0.5">Net of MDR & taxes</div>
-        </div>
-
-        {/* 4. Volume at Risk */}
-        <div className="p-3 bg-slate-950/40 border border-slate-800/40 rounded-xl">
-          <div className="text-[11px] text-amber-400 font-medium flex items-center gap-1">
-            <span>Volume At Risk</span>
-            <AlertTriangle className="w-3 h-3 text-amber-400" />
+          <div className="text-[11px] text-slate-300 mt-1 font-medium">
+            Net anticipated working capital
           </div>
-          <div className="text-base font-bold text-amber-300 font-mono mt-1">
-            {formatCurrency(cashPosition.disputed_volume_at_risk)}
-          </div>
-          <div className="text-[10px] text-slate-500 mt-0.5">Unsettled / Disputed</div>
         </div>
       </div>
-    </div>
+    </section>
   );
 }

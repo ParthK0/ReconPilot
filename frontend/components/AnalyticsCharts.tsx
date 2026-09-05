@@ -13,7 +13,9 @@ import {
   Cell,
   Legend,
 } from "recharts";
-import { Layers, PieChart as PieIcon, Activity } from "lucide-react";
+import { BarChart3, PieChart as PieIcon, CheckCircle2 } from "lucide-react";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "./ui/Card";
+import { Skeleton } from "./ui/Skeleton";
 
 interface AnalyticsChartsProps {
   metrics: {
@@ -24,31 +26,70 @@ interface AnalyticsChartsProps {
     processing_time_seconds: number;
   };
   exceptionCounts: Record<string, number>;
+  isLoading?: boolean;
 }
 
-const EXCEPTION_COLORS = [
+const CATEGORY_COLORS = [
+  "#6366f1", // indigo-500
   "#f59e0b", // amber-500
   "#ef4444", // red-500
   "#8b5cf6", // purple-500
   "#ec4899", // pink-500
-  "#3b82f6", // blue-500
-  "#10b981", // emerald-500
   "#06b6d4", // cyan-500
+  "#10b981", // emerald-500
   "#f97316", // orange-500
 ];
 
-export function AnalyticsCharts({ metrics, exceptionCounts }: AnalyticsChartsProps) {
-  // Data for match distribution bar chart
-  const matchDistributionData = [
+export function AnalyticsCharts({
+  metrics,
+  exceptionCounts,
+  isLoading = false,
+}: AnalyticsChartsProps) {
+  if (isLoading) {
+    return (
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-5 w-40" />
+            <Skeleton className="h-3 w-56" />
+          </CardHeader>
+          <CardContent>
+            <Skeleton className="h-64 w-full rounded-xl" />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-5 w-40" />
+            <Skeleton className="h-3 w-56" />
+          </CardHeader>
+          <CardContent>
+            <Skeleton className="h-64 w-full rounded-xl" />
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Data for reconciliation breakdown bar chart
+  const barData = [
     {
-      name: "Reconciliation Breakdown",
-      "Rule Matches (Deterministic)": metrics.rule_matches,
-      "AI Verified (Math Proven)": metrics.ai_verified,
-      "Exceptions (Needs Review)": metrics.needs_review,
+      name: "Deterministic Rules",
+      count: metrics.rule_matches,
+      fill: "#10b981",
+    },
+    {
+      name: "AI Verified Math",
+      count: metrics.ai_verified,
+      fill: "#818cf8",
+    },
+    {
+      name: "Audit Exceptions",
+      count: metrics.needs_review,
+      fill: "#f59e0b",
     },
   ];
 
-  // Data for exception category pie chart
+  // Data for exception category donut chart
   const pieData = Object.entries(exceptionCounts)
     .filter(([_, count]) => count > 0)
     .map(([category, count]) => ({
@@ -56,149 +97,125 @@ export function AnalyticsCharts({ metrics, exceptionCounts }: AnalyticsChartsPro
       value: count,
     }));
 
-  if (pieData.length === 0 && metrics.needs_review > 0) {
-    pieData.push({ name: "General Discrepancies", value: metrics.needs_review });
-  }
-
-  const speedMultiplier = metrics.processing_time_seconds > 0
-    ? (metrics.records_processed / metrics.processing_time_seconds).toFixed(0)
-    : "100+";
+  const CustomTooltip = ({ active, payload, label }: any) => {
+    if (active && payload && payload.length) {
+      const data = payload[0];
+      return (
+        <div className="bg-slate-900 border border-slate-700/80 p-3 rounded-xl shadow-2xl backdrop-blur-md text-xs space-y-1">
+          <p className="font-bold text-slate-200">{label || data.name}</p>
+          <p className="text-slate-400 font-mono">
+            Count: <span className="font-bold text-slate-100">{data.value}</span>
+          </p>
+        </div>
+      );
+    }
+    return null;
+  };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-      {/* 1. Stacked Match Distribution */}
-      <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-5 backdrop-blur-md flex flex-col justify-between">
-        <div>
-          <div className="flex items-center justify-between mb-4">
+    <section aria-label="Visual Analytics and Operational Breakdown">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Chart 1: Match Waterfall Distribution */}
+        <Card>
+          <CardHeader>
             <div className="flex items-center gap-2">
-              <Layers className="w-4 h-4 text-indigo-400" />
-              <h3 className="text-sm font-bold text-slate-100">Match Resolution Distribution</h3>
+              <div className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                <BarChart3 className="w-4 h-4" aria-hidden="true" />
+              </div>
+              <CardTitle>Reconciliation Execution Waterfall</CardTitle>
             </div>
-            <span className="text-xs text-slate-400 font-mono">
-              Total: {metrics.records_processed} records
-            </span>
-          </div>
-          <p className="text-xs text-slate-400 mb-4">
-            "Rules before AI" ensures 85%+ resolved deterministically before invoking AI verification.
-          </p>
-        </div>
+            <CardDescription>
+              Volume resolved deterministically vs AI forensic verification
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={barData} margin={{ top: 15, right: 15, left: -15, bottom: 20 }}>
+                  <XAxis
+                    dataKey="name"
+                    stroke="#94a3b8"
+                    fontSize={11}
+                    tickLine={false}
+                    axisLine={{ stroke: "#334155" }}
+                  />
+                  <YAxis
+                    stroke="#94a3b8"
+                    fontSize={11}
+                    tickLine={false}
+                    axisLine={{ stroke: "#334155" }}
+                  />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Bar dataKey="count" radius={[6, 6, 0, 0]}>
+                    {barData.map((entry, index) => (
+                      <Cell key={`bar-${index}`} fill={entry.fill} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
 
-        <div className="h-44 w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart
-              data={matchDistributionData}
-              layout="vertical"
-              margin={{ top: 10, right: 20, left: 10, bottom: 5 }}
-            >
-              <XAxis type="number" stroke="#64748b" fontSize={11} />
-              <YAxis type="category" dataKey="name" hide />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "#0f172a",
-                  borderColor: "#334155",
-                  borderRadius: "0.5rem",
-                  fontSize: "12px",
-                  color: "#f8fafc",
-                }}
-              />
-              <Legend
-                wrapperStyle={{ fontSize: "11px", paddingTop: "8px" }}
-              />
-              <Bar dataKey="Rule Matches (Deterministic)" stackId="a" fill="#10b981" radius={[4, 0, 0, 4]} />
-              <Bar dataKey="AI Verified (Math Proven)" stackId="a" fill="#6366f1" />
-              <Bar dataKey="Exceptions (Needs Review)" stackId="a" fill="#f59e0b" radius={[0, 4, 4, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* 2. Exception Taxonomy Donut */}
-      <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-5 backdrop-blur-md flex flex-col justify-between">
-        <div>
-          <div className="flex items-center justify-between mb-2">
+        {/* Chart 2: Exception Categories Donut */}
+        <Card>
+          <CardHeader>
             <div className="flex items-center gap-2">
-              <PieIcon className="w-4 h-4 text-amber-400" />
-              <h3 className="text-sm font-bold text-slate-100">Exception Taxonomy</h3>
+              <div className="p-1.5 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                <PieIcon className="w-4 h-4" aria-hidden="true" />
+              </div>
+              <CardTitle>Operational Exception Breakdown</CardTitle>
             </div>
-            <span className="text-xs text-amber-400 font-mono font-bold">
-              {metrics.needs_review} exceptions
-            </span>
-          </div>
-          <p className="text-xs text-slate-400 mb-2">
-            Structured operational discrepancy categorization.
-          </p>
-        </div>
-
-        <div className="h-44 w-full flex items-center justify-center">
-          {pieData.length > 0 ? (
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={36}
-                  outerRadius={64}
-                  paddingAngle={4}
-                  dataKey="value"
-                >
-                  {pieData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={EXCEPTION_COLORS[index % EXCEPTION_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "#0f172a",
-                    borderColor: "#334155",
-                    borderRadius: "0.5rem",
-                    fontSize: "11px",
-                    color: "#f8fafc",
-                  }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="text-xs text-slate-500 italic">No exceptions detected in current batch</div>
-          )}
-        </div>
-      </div>
-
-      {/* 3. Throughput & Latency Benchmark */}
-      <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-5 backdrop-blur-md flex flex-col justify-between">
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <Activity className="w-4 h-4 text-cyan-400" />
-              <h3 className="text-sm font-bold text-slate-100">Throughput & Performance</h3>
+            <CardDescription>
+              Discrepancies triaged across statutory tax, timing, and fee categories
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="h-64 w-full flex items-center justify-center">
+              {pieData.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={pieData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={55}
+                      outerRadius={85}
+                      paddingAngle={4}
+                      dataKey="value"
+                    >
+                      {pieData.map((_, index) => (
+                        <Cell
+                          key={`cell-${index}`}
+                          fill={CATEGORY_COLORS[index % CATEGORY_COLORS.length]}
+                          stroke="#0f172a"
+                          strokeWidth={2}
+                        />
+                      ))}
+                    </Pie>
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend
+                      verticalAlign="bottom"
+                      height={36}
+                      formatter={(value) => (
+                        <span className="text-[11px] font-medium text-slate-300">{value}</span>
+                      )}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex flex-col items-center justify-center text-center p-6 text-slate-400">
+                  <CheckCircle2 className="w-8 h-8 text-emerald-400 mb-2" />
+                  <p className="text-sm font-semibold text-slate-200">Zero Unresolved Exceptions</p>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    All processed records successfully matched with 100% precision.
+                  </p>
+                </div>
+              )}
             </div>
-            <span className="text-xs text-emerald-400 font-bold bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800/40">
-              SLA Met ✓
-            </span>
-          </div>
-          <p className="text-xs text-slate-400">
-            Real-time pipeline speed vs standard 30-minute manual batch benchmark.
-          </p>
-        </div>
-
-        <div className="my-auto py-2">
-          <div className="flex items-baseline justify-between mb-2">
-            <span className="text-xs text-slate-400">Reconciliation Speed:</span>
-            <span className="text-2xl font-black text-cyan-300 font-mono">
-              {speedMultiplier} <span className="text-xs font-medium text-slate-400">tx/sec</span>
-            </span>
-          </div>
-          <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
-            <div
-              className="bg-gradient-to-r from-cyan-500 to-indigo-500 h-full rounded-full transition-all duration-1000"
-              style={{ width: "95%" }}
-            />
-          </div>
-          <div className="flex justify-between text-[10px] text-slate-500 mt-1.5 font-mono">
-            <span>Wall-clock: {metrics.processing_time_seconds.toFixed(2)}s</span>
-            <span>Target: &lt; 30.0s</span>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       </div>
-    </div>
+    </section>
   );
 }

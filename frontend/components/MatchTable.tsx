@@ -11,8 +11,13 @@ import {
   Download,
   ChevronLeft,
   ChevronRight,
-  ShieldCheck,
+  FileSpreadsheet,
+  X,
 } from "lucide-react";
+import { Badge } from "./ui/Badge";
+import { Button } from "./ui/Button";
+import { TableRowSkeleton } from "./ui/Skeleton";
+import { EmptyState } from "./ui/EmptyState";
 
 export interface MatchItem {
   match_id: string;
@@ -37,6 +42,7 @@ interface MatchTableProps {
   selectedMatchId: string | null;
   onSelectMatch: (matchId: string) => void;
   onExportCsv: () => void;
+  isLoading?: boolean;
 }
 
 export function MatchTable({
@@ -44,12 +50,13 @@ export function MatchTable({
   selectedMatchId,
   onSelectMatch,
   onExportCsv,
+  isLoading = false,
 }: MatchTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [methodFilter, setMethodFilter] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = 15;
+  const pageSize = 12;
 
   const filteredMatches = matches.filter((m) => {
     const matchesSearch =
@@ -74,203 +81,269 @@ export function MatchTable({
   );
 
   const formatCurrency = (val: number | null) => {
-    if (val === null || val === undefined) return "-";
-    return `₹${val.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    if (val === null || val === undefined) return "—";
+    return `₹${val.toLocaleString("en-IN", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
   };
 
-  const getMethodBadge = (method: string, ruleName: string | null) => {
-    if (method === "rule") {
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-950 text-emerald-400 border border-emerald-800/40">
-          <CheckCircle2 className="w-3 h-3" />
-          <span>{ruleName ? ruleName.replace(/_/g, " ") : "Rule Match"}</span>
-        </span>
-      );
+  const getMethodBadge = (method: string) => {
+    switch (method) {
+      case "rule":
+        return (
+          <Badge variant="success" size="sm">
+            <CheckCircle2 className="w-3 h-3" />
+            Rule Match
+          </Badge>
+        );
+      case "ai_verified":
+        return (
+          <Badge variant="ai" size="sm">
+            <Sparkles className="w-3 h-3" />
+            AI Verified
+          </Badge>
+        );
+      case "manual_approved":
+        return (
+          <Badge variant="default" size="sm">
+            Controller Approved
+          </Badge>
+        );
+      default:
+        return (
+          <Badge variant="neutral" size="sm">
+            {method}
+          </Badge>
+        );
     }
-    if (method === "ai_verified") {
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-950 text-indigo-300 border border-indigo-500/40 shadow-sm shadow-indigo-500/20">
-          <Sparkles className="w-3 h-3 text-indigo-400" />
-          <span>AI Verified (Math Proven)</span>
-        </span>
-      );
-    }
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-950 text-blue-300 border border-blue-800/40">
-        <ShieldCheck className="w-3 h-3" />
-        <span>Manual Approved</span>
-      </span>
-    );
   };
 
   return (
-    <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl overflow-hidden shadow-xl backdrop-blur-md">
-      {/* Header controls */}
-      <div className="p-4 border-b border-slate-800/80 flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-950/40">
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1 md:w-64">
-            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+    <div className="bg-slate-900/70 border border-slate-800/80 rounded-2xl shadow-xl backdrop-blur-md overflow-hidden flex flex-col">
+      {/* Header & Controls Toolbar */}
+      <div className="p-4 sm:p-5 border-b border-slate-800/80 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-center gap-2.5">
+          <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+            <FileSpreadsheet className="w-4 h-4" aria-hidden="true" />
+          </div>
+          <div>
+            <h2 className="text-sm sm:text-base font-bold text-slate-100">Reconciliation Match Ledger</h2>
+            <p className="text-xs text-slate-400">
+              {filteredMatches.length} matching transactions across ERP, Gateway, and Bank
+            </p>
+          </div>
+        </div>
+
+        {/* Action Buttons & Filters */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Search Bar */}
+          <div className="relative min-w-[200px] sm:min-w-[240px]">
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             <input
               type="text"
-              placeholder="Search Order ID, UTR, Match ID..."
+              placeholder="Search Order ID, UTR..."
               value={searchTerm}
               onChange={(e) => {
                 setSearchTerm(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+              aria-label="Search transactions by Order ID or UTR"
+              className="w-full bg-slate-950/80 border border-slate-800 rounded-xl pl-8 pr-8 py-1.5 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
             />
+            {searchTerm && (
+              <button
+                onClick={() => setSearchTerm("")}
+                aria-label="Clear search"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
           </div>
 
+          {/* Method Filter */}
           <select
             value={methodFilter}
             onChange={(e) => {
               setMethodFilter(e.target.value);
               setCurrentPage(1);
             }}
-            className="bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-indigo-500"
+            aria-label="Filter by matching method"
+            className="bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-indigo-500"
           >
             <option value="all">All Methods</option>
             <option value="rule">Rule Matches</option>
             <option value="ai">AI Verified</option>
-            <option value="manual">Manual Approved</option>
+            <option value="manual">Controller Approved</option>
           </select>
-        </div>
 
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400 font-mono">
-            Showing {filteredMatches.length} of {matches.length} matches
-          </span>
-
-          <button
+          {/* Export CSV Button */}
+          <Button
+            variant="outline"
+            size="sm"
             onClick={onExportCsv}
-            className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
+            leftIcon={<Download className="w-3.5 h-3.5" />}
           >
-            <Download className="w-3.5 h-3.5" />
-            <span>Export CSV</span>
-          </button>
+            Export CSV
+          </Button>
         </div>
       </div>
 
-      {/* Table */}
+      {/* Table Container */}
       <div className="overflow-x-auto">
-        <table className="w-full text-left text-xs">
-          <thead className="bg-slate-950/80 text-slate-400 font-mono uppercase text-[10px] tracking-wider border-b border-slate-800/80">
+        <table className="w-full text-left text-xs text-slate-300 border-collapse" aria-label="Reconciliation transactions">
+          <thead className="bg-slate-950/70 border-b border-slate-800 text-[11px] font-semibold text-slate-400 uppercase tracking-wider sticky top-0 backdrop-blur z-10">
             <tr>
-              <th className="py-3 px-4">Order ID / UTR</th>
-              <th className="py-3 px-4">Invoice</th>
-              <th className="py-3 px-4">Settlement</th>
-              <th className="py-3 px-4">Bank Credit</th>
-              <th className="py-3 px-4">Resolution Method</th>
-              <th className="py-3 px-4">Confidence</th>
-              <th className="py-3 px-4 text-right">Action</th>
+              <th scope="col" className="py-3 px-4">Order ID & Date</th>
+              <th scope="col" className="py-3 px-4">Method & Rule</th>
+              <th scope="col" className="py-3 px-4 text-right">Invoice Billed</th>
+              <th scope="col" className="py-3 px-4 text-right">Settlement Net</th>
+              <th scope="col" className="py-3 px-4 text-right">Bank Credit</th>
+              <th scope="col" className="py-3 px-4 text-center">Confidence</th>
+              <th scope="col" className="py-3 px-4 text-right">Audit Trace</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-800/60 font-mono">
-            {paginatedMatches.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="py-8 text-center text-slate-500 italic">
-                  No matching records found.
-                </td>
-              </tr>
-            ) : (
-              paginatedMatches.map((m) => {
-                const isSelected = selectedMatchId === m.match_id;
-                const isAI = m.match_method === "ai_verified";
-
+          <tbody className="divide-y divide-slate-800/60">
+            {isLoading ? (
+              Array.from({ length: 6 }).map((_, i) => <TableRowSkeleton key={i} cols={7} />)
+            ) : paginatedMatches.length > 0 ? (
+              paginatedMatches.map((match) => {
+                const isSelected = selectedMatchId === match.match_id;
                 return (
                   <tr
-                    key={m.match_id}
-                    onClick={() => onSelectMatch(m.match_id)}
-                    className={`cursor-pointer transition-colors ${
+                    key={match.match_id}
+                    tabIndex={0}
+                    role="button"
+                    aria-selected={isSelected}
+                    onClick={() => onSelectMatch(match.match_id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onSelectMatch(match.match_id);
+                      }
+                    }}
+                    className={`cursor-pointer transition-colors duration-150 ${
                       isSelected
-                        ? "bg-indigo-950/40 hover:bg-indigo-950/50"
-                        : isAI
-                        ? "bg-indigo-950/10 hover:bg-slate-800/50"
-                        : "hover:bg-slate-800/30"
+                        ? "bg-indigo-950/40 border-l-2 border-indigo-500"
+                        : "hover:bg-slate-800/40 focus:bg-slate-800/60"
                     }`}
                   >
-                    <td className="py-3 px-4">
-                      <div className="font-semibold text-slate-200">
-                        {m.order_id || m.match_id.substring(0, 12)}
+                    <td className="py-3.5 px-4">
+                      <div className="font-mono font-semibold text-slate-200">
+                        {match.order_id || "Unlinked Order"}
                       </div>
-                      {m.reference_number && (
-                        <div className="text-[10px] text-slate-400 truncate max-w-[150px]">
-                          UTR: {m.reference_number}
+                      <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                        {match.reference_number || match.match_id.substring(0, 10)}
+                      </div>
+                    </td>
+
+                    <td className="py-3.5 px-4">
+                      <div className="flex items-center gap-1.5">
+                        {getMethodBadge(match.match_method)}
+                      </div>
+                      {match.rule_name && (
+                        <div className="text-[10px] text-slate-400 font-mono mt-1 truncate max-w-[140px]">
+                          {match.rule_name}
                         </div>
                       )}
                     </td>
-                    <td className="py-3 px-4 text-slate-300">
-                      {formatCurrency(m.invoice_amount || m.amount)}
+
+                    <td className="py-3.5 px-4 text-right font-mono text-slate-200 font-medium">
+                      {formatCurrency(match.invoice_amount)}
                     </td>
-                    <td className="py-3 px-4 text-slate-300">
-                      {formatCurrency(m.settlement_amount || m.amount)}
+
+                    <td className="py-3.5 px-4 text-right font-mono text-indigo-300 font-medium">
+                      {formatCurrency(match.settlement_amount)}
                     </td>
-                    <td className="py-3 px-4 text-slate-300">
-                      {formatCurrency(m.bank_amount || m.amount)}
+
+                    <td className="py-3.5 px-4 text-right font-mono text-emerald-300 font-medium">
+                      {formatCurrency(match.bank_amount)}
                     </td>
-                    <td className="py-3 px-4">
-                      {getMethodBadge(m.match_method, m.rule_name)}
-                    </td>
-                    <td className="py-3 px-4">
-                      <div className="flex items-center gap-1.5">
-                        <div className="w-12 bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                          <div
-                            className={`h-full rounded-full ${
-                              m.confidence >= 0.95
-                                ? "bg-emerald-400"
-                                : m.confidence >= 0.85
-                                ? "bg-indigo-400"
-                                : "bg-amber-400"
-                            }`}
-                            style={{ width: `${m.confidence * 100}%` }}
-                          />
-                        </div>
-                        <span className="text-[11px] font-bold text-slate-300">
-                          {(m.confidence * 100).toFixed(0)}%
-                        </span>
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 text-right">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onSelectMatch(m.match_id);
-                        }}
-                        className="px-2.5 py-1 text-[11px] rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-sans font-medium transition-colors"
+
+                    <td className="py-3.5 px-4 text-center">
+                      <span
+                        className={`inline-block font-mono font-bold text-[11px] px-2 py-0.5 rounded-full ${
+                          match.confidence >= 0.95
+                            ? "bg-emerald-950 text-emerald-300 border border-emerald-800/40"
+                            : match.confidence >= 0.8
+                            ? "bg-indigo-950 text-indigo-300 border border-indigo-800/40"
+                            : "bg-amber-950 text-amber-300 border border-amber-800/40"
+                        }`}
                       >
-                        Inspect Trace
-                      </button>
+                        {(match.confidence * 100).toFixed(0)}%
+                      </span>
+                    </td>
+
+                    <td className="py-3.5 px-4 text-right">
+                      <span className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-400 hover:text-indigo-300">
+                        Inspect
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </span>
                     </td>
                   </tr>
                 );
               })
+            ) : (
+              <tr>
+                <td colSpan={7} className="py-10">
+                  <EmptyState
+                    title="No Matching Transactions"
+                    description="No records match your active search and filter criteria."
+                    action={
+                      (searchTerm || methodFilter !== "all") && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setSearchTerm("");
+                            setMethodFilter("all");
+                          }}
+                        >
+                          Clear Filters
+                        </Button>
+                      )
+                    }
+                  />
+                </td>
+              </tr>
             )}
           </tbody>
         </table>
       </div>
 
-      {/* Pagination */}
+      {/* Pagination Footer */}
       {totalPages > 1 && (
-        <div className="p-3 border-t border-slate-800/80 flex items-center justify-between bg-slate-950/40 text-xs text-slate-400">
+        <div className="p-4 border-t border-slate-800/80 bg-slate-950/40 flex items-center justify-between text-xs text-slate-400">
           <div>
-            Page {currentPage} of {totalPages}
+            Showing <span className="font-semibold text-slate-200">{(currentPage - 1) * pageSize + 1}</span> to{" "}
+            <span className="font-semibold text-slate-200">
+              {Math.min(currentPage * pageSize, filteredMatches.length)}
+            </span>{" "}
+            of <span className="font-semibold text-slate-200">{filteredMatches.length}</span> entries
           </div>
-          <div className="flex items-center gap-1">
-            <button
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
               disabled={currentPage <= 1}
               onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              className="p-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800"
+              aria-label="Previous Page"
             >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <button
+              <ChevronLeft className="w-3.5 h-3.5" />
+            </Button>
+            <span className="font-mono text-slate-300 px-2">
+              {currentPage} / {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
               disabled={currentPage >= totalPages}
               onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              className="p-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800"
+              aria-label="Next Page"
             >
-              <ChevronRight className="w-4 h-4" />
-            </button>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </Button>
           </div>
         </div>
       )}

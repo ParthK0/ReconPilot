@@ -1,16 +1,16 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   X,
   UserCheck,
-  Sparkles,
   CheckCircle2,
   XCircle,
   AlertTriangle,
   Send,
 } from "lucide-react";
 import { ExceptionItem } from "./ExceptionGrid";
+import { Button } from "./ui/Button";
 
 interface ReviewModalProps {
   exception: ExceptionItem | null;
@@ -29,6 +29,17 @@ export function ReviewModal({ exception, onClose, onSubmitReview }: ReviewModalP
   const [notes, setNotes] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
+  // ESC key listener for accessibility
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
   if (!exception) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -45,133 +56,121 @@ export function ReviewModal({ exception, onClose, onSubmitReview }: ReviewModalP
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div
+      className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="modal-title"
+    >
       <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5">
-        <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+        {/* Modal Header */}
+        <div className="flex items-center justify-between pb-4 border-b border-slate-800/80">
           <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
-              <UserCheck className="w-4 h-4" />
+            <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+              <UserCheck className="w-4 h-4" aria-hidden="true" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-slate-100">Human Controller Review</h3>
+              <h2 id="modal-title" className="text-sm sm:text-base font-bold text-slate-100">
+                Human Controller Audit Review
+              </h2>
               <p className="text-xs text-slate-400">
-                Exception ID: <span className="font-mono">{exception.exception_id.substring(0, 12)}</span>
+                Exception: <span className="font-mono text-slate-300">{exception.exception_id.substring(0, 14)}</span>
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200"
+            aria-label="Close review dialog"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="p-3.5 bg-slate-950/60 border border-slate-800 rounded-xl space-y-1.5 font-mono text-xs">
-            <div className="flex justify-between text-slate-400">
-              <span>Category:</span>
-              <span className="text-amber-400 font-bold uppercase">{exception.category}</span>
-            </div>
-            <div className="flex justify-between text-slate-400">
-              <span>Order / Record ID:</span>
-              <span className="text-slate-200">{exception.order_id || exception.source_record_id}</span>
-            </div>
-            <div className="flex justify-between text-slate-400">
-              <span>Amount:</span>
-              <span className="text-slate-200">
-                ₹{exception.amount?.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
-              </span>
-            </div>
-            {exception.discrepancy_amount && (
-              <div className="flex justify-between text-rose-400">
-                <span>Variance:</span>
-                <span>₹{exception.discrepancy_amount?.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
-              </div>
-            )}
-          </div>
-
+        {/* Form Body */}
+        <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+          {/* Action Toggle */}
           <div>
-            <label className="text-xs font-semibold text-slate-300 block mb-2">Review Decision</label>
-            <div className="grid grid-cols-2 gap-3">
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              Resolution Disposition
+            </label>
+            <div className="grid grid-cols-2 gap-2.5">
               <button
                 type="button"
                 onClick={() => setAction("approve")}
-                className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                className={`py-2 px-3 rounded-xl border flex items-center justify-center gap-2 font-semibold transition-all ${
                   action === "approve"
-                    ? "bg-emerald-950/60 border-emerald-500 text-emerald-300 shadow-md shadow-emerald-900/20"
-                    : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700"
+                    ? "bg-emerald-950 text-emerald-300 border-emerald-600 shadow-md shadow-emerald-950/40"
+                    : "bg-slate-950/60 text-slate-400 border-slate-800 hover:bg-slate-800/60"
                 }`}
               >
-                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                <span>Approve Match</span>
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                Approve & Match
               </button>
-
               <button
                 type="button"
                 onClick={() => setAction("reject")}
-                className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                className={`py-2 px-3 rounded-xl border flex items-center justify-center gap-2 font-semibold transition-all ${
                   action === "reject"
-                    ? "bg-rose-950/60 border-rose-500 text-rose-300 shadow-md shadow-rose-900/20"
-                    : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700"
+                    ? "bg-rose-950 text-rose-300 border-rose-600 shadow-md shadow-rose-950/40"
+                    : "bg-slate-950/60 text-slate-400 border-slate-800 hover:bg-slate-800/60"
                 }`}
               >
-                <XCircle className="w-4 h-4 text-rose-400" />
-                <span>Reject & Dispute</span>
+                <XCircle className="w-3.5 h-3.5" />
+                Reject Match
               </button>
             </div>
           </div>
 
+          {/* Justification Reason Dropdown */}
           <div>
-            <label className="text-xs font-semibold text-slate-300 block mb-1.5">Resolution Reason</label>
+            <label htmlFor="reason-select" className="block text-xs font-semibold text-slate-300 mb-1.5">
+              Primary Accounting Justification
+            </label>
             <select
+              id="reason-select"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+              className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
             >
-              <option value="Manual rate schedule override">Manual rate schedule override</option>
-              <option value="One-off commercial discount accepted">One-off commercial discount accepted</option>
-              <option value="Known banking clearing delay">Known banking clearing delay</option>
-              <option value="Clawback or chargeback accepted">Clawback or chargeback accepted</option>
-              <option value="Invalid transaction / fraud dispute">Invalid transaction / fraud dispute</option>
+              <option value="Manual rate schedule override">Manual rate schedule override (Contractual discount)</option>
+              <option value="Section 194-O TDS withholding confirmed">Section 194-O TDS withholding confirmed (1% statutory)</option>
+              <option value="T+2 clearing cutoff weekend shift">T+2 clearing cutoff weekend shift (Banking delay)</option>
+              <option value="Temporary risk escrow hold release">Temporary risk escrow hold release (Dispute resolved)</option>
+              <option value="Forensic anomaly - requires merchant inquiry">Forensic anomaly - requires merchant inquiry</option>
             </select>
           </div>
 
+          {/* Controller Audit Notes */}
           <div>
-            <label className="text-xs font-semibold text-slate-300 block mb-1.5">
-              Controller Notes (Recorded into Feedback Memory)
+            <label htmlFor="review-notes" className="block text-xs font-semibold text-slate-300 mb-1.5">
+              Controller Audit Notes (Logs to Feedback Memory)
             </label>
             <textarea
+              id="review-notes"
               rows={3}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder="Provide exact rationale to train episodic memory for future similar discrepancies..."
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+              placeholder="Document the exact basis for approval or adjustment..."
+              className="w-full bg-slate-950/80 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500"
+              required
             />
           </div>
 
-          <div className="pt-3 border-t border-slate-800 flex items-center justify-end gap-3">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg transition-colors"
-            >
+          {/* Actions */}
+          <div className="pt-3 border-t border-slate-800/80 flex items-center justify-end gap-2.5">
+            <Button type="button" variant="ghost" size="sm" onClick={onClose}>
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
-              disabled={isSubmitting}
-              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg transition-all flex items-center gap-2 shadow-lg shadow-indigo-600/20"
+              variant="primary"
+              size="sm"
+              isLoading={isSubmitting}
+              leftIcon={<Send className="w-3.5 h-3.5" />}
             >
-              {isSubmitting ? (
-                <span>Submitting...</span>
-              ) : (
-                <>
-                  <Send className="w-3.5 h-3.5" />
-                  <span>Submit & Save to Memory</span>
-                </>
-              )}
-            </button>
+              Save Audit Decision
+            </Button>
           </div>
         </form>
       </div>

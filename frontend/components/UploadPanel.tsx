@@ -8,10 +8,12 @@ import {
   AlertCircle,
   Play,
   Layers,
-  ArrowRight,
-  Shield,
+  Building2,
+  X,
+  FileText,
 } from "lucide-react";
 import { API_BASE_URL } from "../lib/api";
+import { Button } from "./ui/Button";
 
 interface UploadPanelProps {
   onUploadSuccess: (batchId: string) => void;
@@ -35,6 +37,12 @@ export function UploadPanel({ onUploadSuccess, merchants }: UploadPanelProps) {
   const bankInputRef = useRef<HTMLInputElement>(null);
   const invoiceInputRef = useRef<HTMLInputElement>(null);
   const groundTruthInputRef = useRef<HTMLInputElement>(null);
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
 
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,189 +76,190 @@ export function UploadPanel({ onUploadSuccess, merchants }: UploadPanelProps) {
       const result = await response.json();
       onUploadSuccess(result.batch_id);
     } catch (err: any) {
-      setUploadError(err.message || "Failed to upload and reconcile batch.");
+      setUploadError(err.message || "An unexpected error occurred during batch ingestion.");
     } finally {
       setIsUploading(false);
     }
   };
 
-  const renderFileCard = (
-    title: string,
-    description: string,
-    file: File | null,
-    setFile: (f: File | null) => void,
-    inputRef: React.RefObject<HTMLInputElement>,
-    accept: string = ".csv",
-    required: boolean = true
-  ) => {
-    return (
-      <div
-        onClick={() => inputRef.current?.click()}
-        className={`relative border-2 border-dashed rounded-xl p-5 cursor-pointer transition-all ${
-          file
-            ? "border-emerald-500/50 bg-emerald-950/10 hover:border-emerald-400"
-            : "border-slate-800 bg-slate-900/40 hover:border-indigo-500/50 hover:bg-slate-900/70"
-        }`}
-      >
-        <input
-          type="file"
-          ref={inputRef}
-          accept={accept}
-          className="hidden"
-          onChange={(e) => {
-            if (e.target.files && e.target.files[0]) {
-              setFile(e.target.files[0]);
-              setUploadError(null);
-            }
-          }}
-        />
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-3">
-            <div
-              className={`p-2.5 rounded-lg ${
-                file ? "bg-emerald-500/20 text-emerald-400" : "bg-slate-800 text-slate-400"
-              }`}
-            >
-              <FileSpreadsheet className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-slate-200 text-sm">{title}</span>
-                {required && (
-                  <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-indigo-950/80 text-indigo-400 border border-indigo-800/40">
-                    Required
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-slate-400 mt-0.5">{description}</p>
-            </div>
-          </div>
-          {file ? (
-            <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0" />
-          ) : (
-            <UploadCloud className="w-5 h-5 text-slate-500 flex-shrink-0" />
-          )}
-        </div>
-
-        {file && (
-          <div className="mt-3 pt-3 border-t border-emerald-900/30 flex items-center justify-between text-xs text-slate-300">
-            <span className="truncate max-w-[200px] font-mono text-emerald-300">{file.name}</span>
-            <span className="text-slate-400">{(file.size / 1024).toFixed(1)} KB</span>
-          </div>
-        )}
-      </div>
-    );
-  };
+  const uploadSlots = [
+    {
+      id: "settlement",
+      title: "1. Gateway Settlement CSV",
+      description: "Net settlement payouts, fees, GST, and TDS from Razorpay",
+      file: settlementFile,
+      setFile: setSettlementFile,
+      ref: settlementInputRef,
+      accept: ".csv",
+    },
+    {
+      id: "bank",
+      title: "2. Bank Statement CSV",
+      description: "Lump-sum bank credits, UTR references, and closing balances",
+      file: bankFile,
+      setFile: setBankFile,
+      ref: bankInputRef,
+      accept: ".csv",
+    },
+    {
+      id: "invoice",
+      title: "3. ERP Invoices CSV",
+      description: "Gross customer billing lines, order IDs, and line items",
+      file: invoiceFile,
+      setFile: setInvoiceFile,
+      ref: invoiceInputRef,
+      accept: ".csv",
+    },
+    {
+      id: "ground_truth",
+      title: "4. Ground Truth JSON (Optional)",
+      description: "Pre-labeled benchmarks for automated precision / recall evaluation",
+      file: groundTruthFile,
+      setFile: setGroundTruthFile,
+      ref: groundTruthInputRef,
+      accept: ".json",
+    },
+  ];
 
   return (
-    <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-6 shadow-xl backdrop-blur-md">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-800/80">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="px-2.5 py-1 text-xs font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 rounded-full">
-              Multi-Source Ingestion
-            </span>
-            <h2 className="text-lg font-bold text-slate-100">Upload 3-Way Reconciliation Batch</h2>
+    <div className="bg-slate-900/70 border border-slate-800/80 rounded-2xl p-6 shadow-xl backdrop-blur-md space-y-6">
+      {/* Header */}
+      <div className="border-b border-slate-800/80 pb-4">
+        <div className="flex items-center gap-2.5">
+          <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+            <UploadCloud className="w-5 h-5" aria-hidden="true" />
           </div>
-          <p className="text-xs text-slate-400 mt-1">
-            ReconPilot normalizes headers, calculates statutory rate schedules, and proves AI reasoning mathematically.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <label className="text-xs font-medium text-slate-400 whitespace-nowrap">Merchant Profile:</label>
-          <select
-            value={merchantType}
-            onChange={(e) => setMerchantType(e.target.value)}
-            className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 font-medium focus:outline-none focus:border-indigo-500"
-          >
-            {merchants.map((m) => (
-              <option key={m.merchant_type} value={m.merchant_type}>
-                {m.display_name}
-              </option>
-            ))}
-          </select>
+          <div>
+            <h2 className="text-base font-bold text-slate-100">Three-Way Financial Batch Ingestion</h2>
+            <p className="text-xs text-slate-400">
+              Upload customer ERP registers, payment aggregator settlements, and commercial bank statements
+            </p>
+          </div>
         </div>
       </div>
 
       {uploadError && (
-        <div className="mt-4 p-3.5 bg-rose-950/30 border border-rose-800/50 rounded-xl flex items-center gap-3 text-rose-300 text-xs">
-          <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-400" />
-          <span>{uploadError}</span>
+        <div
+          role="alert"
+          className="bg-rose-950/50 border border-rose-800/60 p-4 rounded-xl flex items-start justify-between text-xs text-rose-200"
+        >
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            <span>{uploadError}</span>
+          </div>
+          <button
+            onClick={() => setUploadError(null)}
+            aria-label="Dismiss error notification"
+            className="text-rose-400 hover:text-rose-200"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 
-      <form onSubmit={handleUploadSubmit} className="mt-6 space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {renderFileCard(
-            "1. Razorpay Settlements",
-            "Gateway payouts, MDR fees, GST, TDS",
-            settlementFile,
-            setSettlementFile,
-            settlementInputRef
-          )}
-          {renderFileCard(
-            "2. Bank Statement",
-            "Corporate bank credits, UTR deposits",
-            bankFile,
-            setBankFile,
-            bankInputRef
-          )}
-          {renderFileCard(
-            "3. ERP Invoices",
-            "Billed customer accounts receivable",
-            invoiceFile,
-            setInvoiceFile,
-            invoiceInputRef
-          )}
+      <form onSubmit={handleUploadSubmit} className="space-y-6">
+        {/* Merchant Archetype Profile Selector */}
+        <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
+          <label htmlFor="merchant-profile-select" className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-2">
+            <Building2 className="w-4 h-4 text-indigo-400" />
+            Target Merchant Archetype (Configures Statutory MDR, GST & TDS Rate Cards)
+          </label>
+          <select
+            id="merchant-profile-select"
+            value={merchantType}
+            onChange={(e) => setMerchantType(e.target.value)}
+            className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+          >
+            {merchants.map((m) => (
+              <option key={m.merchant_type} value={m.merchant_type}>
+                {m.display_name} — {m.description}
+              </option>
+            ))}
+          </select>
         </div>
 
-        <div className="p-4 bg-slate-950/50 border border-slate-800/60 rounded-xl flex flex-col md:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-3 text-xs text-slate-400">
-            <Shield className="w-4 h-4 text-indigo-400 flex-shrink-0" />
-            <span>
-              Optional Ground Truth Benchmark: upload labeled ground truth JSON to calculate live Precision, Recall, and Confusion Matrix.
-            </span>
-          </div>
-
-          <div className="flex items-center gap-3 w-full md:w-auto">
-            <button
-              type="button"
-              onClick={() => groundTruthInputRef.current?.click()}
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-lg transition-colors font-medium"
+        {/* 4 File Dropzone Slots */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {uploadSlots.map((slot) => (
+            <div
+              key={slot.id}
+              className={`p-4 rounded-xl border transition-all duration-150 flex flex-col justify-between gap-3 ${
+                slot.file
+                  ? "bg-indigo-950/30 border-indigo-500/40"
+                  : "bg-slate-950/50 border-slate-800 hover:border-slate-700"
+              }`}
             >
-              {groundTruthFile ? groundTruthFile.name : "Attach Ground Truth (Optional)"}
-            </button>
-            <input
-              type="file"
-              ref={groundTruthInputRef}
-              accept=".json"
-              className="hidden"
-              onChange={(e) => {
-                if (e.target.files && e.target.files[0]) {
-                  setGroundTruthFile(e.target.files[0]);
-                }
-              }}
-            />
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-200">{slot.title}</span>
+                  {slot.file ? (
+                    <span className="flex items-center gap-1 text-[11px] font-semibold text-emerald-400">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Selected
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-slate-500 uppercase font-mono">Required</span>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                  {slot.description}
+                </p>
+              </div>
 
-            <button
-              type="submit"
-              disabled={isUploading || !settlementFile || !bankFile || !invoiceFile}
-              className="flex-1 md:flex-initial px-6 py-2 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 disabled:from-slate-800 disabled:to-slate-800 disabled:text-slate-500 text-white font-semibold text-xs rounded-lg shadow-lg shadow-indigo-600/20 transition-all flex items-center justify-center gap-2"
-            >
-              {isUploading ? (
-                <>
-                  <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span>Processing Pipeline...</span>
-                </>
+              <input
+                ref={slot.ref}
+                type="file"
+                accept={slot.accept}
+                onChange={(e) => {
+                  if (e.target.files && e.target.files[0]) {
+                    slot.setFile(e.target.files[0]);
+                  }
+                }}
+                className="hidden"
+              />
+
+              {slot.file ? (
+                <div className="flex items-center justify-between bg-slate-900/80 p-2.5 rounded-lg border border-slate-800 text-xs font-mono">
+                  <div className="flex items-center gap-2 truncate pr-2">
+                    <FileText className="w-4 h-4 text-indigo-400 shrink-0" />
+                    <span className="truncate text-slate-200">{slot.file.name}</span>
+                    <span className="text-slate-500 text-[10px]">({formatFileSize(slot.file.size)})</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => slot.setFile(null)}
+                    aria-label={`Remove file ${slot.file.name}`}
+                    className="text-slate-400 hover:text-rose-400 p-1"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               ) : (
-                <>
-                  <Play className="w-3.5 h-3.5 fill-current" />
-                  <span>Execute 3-Way Reconciliation</span>
-                </>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => slot.ref.current?.click()}
+                  leftIcon={<FileSpreadsheet className="w-3.5 h-3.5" />}
+                >
+                  Choose File
+                </Button>
               )}
-            </button>
-          </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Submit Actions */}
+        <div className="flex justify-end pt-2">
+          <Button
+            type="submit"
+            variant="primary"
+            size="md"
+            isLoading={isUploading}
+            disabled={!settlementFile || !bankFile || !invoiceFile}
+            leftIcon={<Play className="w-4 h-4" />}
+          >
+            {isUploading ? "Ingesting & Reconciling..." : "Run Autonomous Reconciliation Pipeline"}
+          </Button>
         </div>
       </form>
     </div>
