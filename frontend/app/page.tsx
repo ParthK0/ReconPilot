@@ -266,17 +266,7 @@ export default function Home() {
             <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-indigo-400 flex items-center justify-center shadow-lg shadow-indigo-600/30 shrink-0">
               <Sparkles className="w-4 h-4 text-white" aria-hidden="true" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-base font-black tracking-tight text-white">ReconPilot</span>
-                <Badge variant="ai" size="sm">
-                  Track 04: AI Finance Controller
-                </Badge>
-              </div>
-              <p className="text-[11px] text-slate-400 font-medium">
-                Deterministic Rules &bull; Math-Proven AI &bull; Treasury Control
-              </p>
-            </div>
+            <span className="text-lg font-black tracking-tight text-white">ReconPilot</span>
           </div>
 
           {/* Quick Actions & Profile Selector */}
